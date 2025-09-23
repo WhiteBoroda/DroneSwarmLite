@@ -269,6 +269,45 @@ namespace SwarmControl {
         bool send_encrypted_packet(DroneID target_drone, const uint8_t* data, size_t data_len);
         bool receive_encrypted_packet(uint8_t* data, size_t& data_len, DroneID& sender_drone);
 
+        // Power management - hot reload support
+        bool SetTxPower(uint8_t power_level);  // 0-33 range
+        uint8_t GetTxPower() const;
+        bool SetRxGain(uint8_t gain_level);
+        uint8_t GetRxGain() const;
+
+// Update rate control - hot reload support
+        bool SetUpdateRate(uint16_t rate_hz);  // 1-1000 Hz
+        uint16_t GetUpdateRate() const;
+        bool SetMeasurementInterval(uint32_t interval_ms);
+        uint32_t GetMeasurementInterval() const;
+
+// Ranging configuration - hot reload support
+        bool SetRangingMode(UWBRangingMode mode);
+        UWBRangingMode GetRangingMode() const;
+        bool SetMaxRangingDistance(double max_distance_m);
+        double GetMaxRangingDistance() const;
+
+// Accuracy and filtering - hot reload support
+        bool SetPositionAccuracyThreshold(double threshold_m);
+        double GetPositionAccuracyThreshold() const;
+        bool EnableOutlierRejection(bool enable);
+        bool IsOutlierRejectionEnabled() const;
+
+// Channel and timing - hot reload support
+        bool SetChannel(uint8_t channel);  // 1-7 except 6
+        uint8_t GetChannel() const;
+        bool SetPreambleLength(uint16_t length);
+        uint16_t GetPreambleLength() const;
+
+// Antenna configuration - hot reload support
+        bool SetAntennaDelay(uint16_t tx_delay, uint16_t rx_delay);
+        bool GetAntennaDelay(uint16_t& tx_delay, uint16_t& rx_delay) const;
+
+// Calibration and diagnostics - hot reload support
+        bool TriggerSelfCalibration();
+        bool RunDiagnostics();
+        bool ResetToDefaults();
+
     private:
         // Internal worker methods
         void ranging_worker();

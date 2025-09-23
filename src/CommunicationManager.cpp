@@ -732,7 +732,342 @@ namespace SwarmControl {
                   << " To:" << message.destination_id
                   << " Seq:" << message.sequence_number << std::endl;
     }
+// Power management methods
+    bool CommunicationManager::set_max_power_level(int8_t max_power_dbm) {
+        // Validate power level (typical LoRa range: 0-30 dBm)
+        if (max_power_dbm < 0 || max_power_dbm > 30) {
+            log_communication_event("Invalid max power level", std::to_string(max_power_dbm));
+            return false;
+        }
 
+        // Ensure max >= min
+        if (max_power_dbm < current_lora_config_.power_level) {
+            current_lora_config_.power_level = max_power_dbm;
+            log_communication_event("Adjusted current power to new max", std::to_string(max_power_dbm));
+        }
+
+        // Update configuration
+        // TODO: Apply to actual hardware via LoRa driver
+        log_communication_event("Max power updated", std::to_string(max_power_dbm) + " dBm");
+        return true;
+    }
+
+    bool CommunicationManager::set_min_power_level(int8_t min_power_dbm) {
+        if (min_power_dbm < 0 || min_power_dbm > 30) {
+            log_communication_event("Invalid min power level", std::to_string(min_power_dbm));
+            return false;
+        }
+
+        // Ensure current >= min
+        if (current_lora_config_.power_level < min_power_dbm) {
+            current_lora_config_.power_level = min_power_dbm;
+            log_communication_event("Adjusted current power to new min", std::to_string(min_power_dbm));
+        }
+
+        log_communication_event("Min power updated", std::to_string(min_power_dbm) + " dBm");
+        return true;
+    }
+
+    bool CommunicationManager::set_current_power_level(int8_t power_dbm) {
+        if (power_dbm < 0 || power_dbm > 30) {
+            log_communication_event("Invalid power level", std::to_string(power_dbm));
+            return false;
+        }
+
+        current_power_level_ = power_dbm;
+        current_lora_config_.power_level = power_dbm;
+
+        // TODO: Apply to actual hardware
+        // set_lora_tx_power(power_dbm);
+
+        log_communication_event("Power level updated", std::to_string(power_dbm) + " dBm");
+        return true;
+    }
+
+    int8_t CommunicationManager::get_max_power_level() const {
+        return 30; // TODO: Return actual max from config
+    }
+
+    int8_t CommunicationManager::get_min_power_level() const {
+        return 0; // TODO: Return actual min from config
+    }
+
+    int8_t CommunicationManager::get_current_power_level() const {
+        return current_power_level_;
+    }
+
+// Frequency management methods
+    bool CommunicationManager::update_frequency_list(const std::vector<uint32_t>& new_frequencies) {
+        if (new_frequencies.empty()) {
+            log_communication_event("Empty frequency list provided", "ERROR");
+            return false;
+        }
+
+        // Validate frequencies
+        for (auto freq : new_frequencies) {
+            if (freq < 433000000 || freq > 2500000000) {
+                log_communication_event("Invalid frequency", std::to_string(freq));
+                return false;
+            }
+        }
+
+        // Update frequency list
+        std::lock_guard<std::mutex> lock(freq_mutex_);
+        frequency_list_ = new_frequencies;
+
+        // Reset frequency index if current index is out of bounds
+        if (frequency_index_ >= frequency_list_.size()) {
+            frequency_index_ = 0;
+            current_frequency_ = frequency_list_[0];
+            current_lora_config_.frequency = current_frequency_;
+
+            // TODO: Apply new frequency to hardware
+            log_communication_event("Frequency reset to", std::to_string(current_frequency_));
+        }
+
+        log_communication_event("Frequency list updated", std::to_string(new_frequencies.size()) + " frequencies");
+        return true;
+    }
+
+    bool CommunicationManager::add_frequency(uint32_t frequency) {
+        if (frequency < 433000000 || frequency > 2500000000) {
+            log_communication_event("Invalid frequency", std::to_string(frequency));
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(freq_mutex_);
+
+        // Check if frequency already exists
+        auto it = std::find(frequency_list_.begin(), frequency_list_.end(), frequency);
+        if (it != frequency_list_.end()) {
+            log_communication_event("Frequency already exists", std::to_string(frequency));
+            return true; // Not an error
+        }
+
+        frequency_list_.push_back(frequency);
+        log_communication_event("Added frequency", std::to_string(frequency));
+        return true;
+    }
+
+    bool CommunicationManager::remove_frequency(uint32_t frequency) {
+        std::lock_guard<std::mutex> lock(freq_mutex_);
+
+        if (frequency_list_.size() <= 1) {
+            log_communication_event("Cannot remove last frequency", "ERROR");
+            return false;
+        }
+
+        auto it = std::find(frequency_list_.begin(), frequency_list_.end(), frequency);
+        if (it != frequency_list_.end()) {
+            frequency_list_.erase(it);
+
+            // If we removed the current frequency, switch to the first one
+            if (current_frequency_ == frequency) {
+                frequency_index_ = 0;
+                current_frequency_ = frequency_list_[0];
+                current_lora_config_.frequency = current_frequency_;
+
+                // TODO: Apply new frequency to hardware
+                log_communication_event("Switched to frequency", std::to_string(current_frequency_));
+            }
+
+            log_communication_event("Removed frequency", std::to_string(frequency));
+            return true;
+        }
+
+        log_communication_event("Frequency not found", std::to_string(frequency));
+        return false;
+    }
+
+    std::vector<uint32_t> CommunicationManager::get_frequency_list() const {
+        std::lock_guard<std::mutex> lock(freq_mutex_);
+        return frequency_list_;
+    }
+
+    bool CommunicationManager::set_primary_frequency(uint32_t frequency) {
+        std::lock_guard<std::mutex> lock(freq_mutex_);
+
+        auto it = std::find(frequency_list_.begin(), frequency_list_.end(), frequency);
+        if (it == frequency_list_.end()) {
+            log_communication_event("Frequency not in list", std::to_string(frequency));
+            return false;
+        }
+
+        frequency_index_ = std::distance(frequency_list_.begin(), it);
+        current_frequency_ = frequency;
+        current_lora_config_.frequency = current_frequency_;
+
+        // TODO: Apply to hardware immediately
+        // set_lora_frequency(frequency);
+
+        log_communication_event("Primary frequency set", std::to_string(frequency));
+        return true;
+    }
+
+    uint32_t CommunicationManager::get_current_frequency() const {
+        return current_frequency_;
+    }
+
+// Frequency hopping methods
+    bool CommunicationManager::enable_frequency_hopping(bool enable) {
+        // TODO: Start/stop frequency hopping thread or mechanism
+        log_communication_event("Frequency hopping", enable ? "enabled" : "disabled");
+        return true;
+    }
+
+    bool CommunicationManager::set_frequency_hop_interval(uint32_t interval_ms) {
+        if (interval_ms < 100 || interval_ms > 60000) { // 100ms to 60s
+            log_communication_event("Invalid hop interval", std::to_string(interval_ms));
+            return false;
+        }
+
+        // TODO: Update hopping timer
+        log_communication_event("Hop interval updated", std::to_string(interval_ms) + "ms");
+        return true;
+    }
+
+    bool CommunicationManager::set_interference_threshold(double threshold_dbm) {
+        if (threshold_dbm < -120.0 || threshold_dbm > -30.0) {
+            log_communication_event("Invalid interference threshold", std::to_string(threshold_dbm));
+            return false;
+        }
+
+        // TODO: Update interference detection threshold
+        log_communication_event("Interference threshold updated", std::to_string(threshold_dbm) + " dBm");
+        return true;
+    }
+
+    bool CommunicationManager::is_frequency_hopping_enabled() const {
+        // TODO: Return actual state
+        return true; // Stub
+    }
+
+    uint32_t CommunicationManager::get_frequency_hop_interval() const {
+        // TODO: Return actual interval
+        return 5000; // Stub - 5 seconds
+    }
+
+// Mesh networking methods
+    bool CommunicationManager::enable_mesh_networking(bool enable) {
+        // TODO: Enable/disable mesh functionality
+        log_communication_event("Mesh networking", enable ? "enabled" : "disabled");
+        return true;
+    }
+
+    bool CommunicationManager::set_mesh_max_hops(uint8_t max_hops) {
+        if (max_hops < 1 || max_hops > 15) {
+            log_communication_event("Invalid max hops", std::to_string(max_hops));
+            return false;
+        }
+
+        // TODO: Update mesh max hops
+        log_communication_event("Mesh max hops updated", std::to_string(max_hops));
+        return true;
+    }
+
+    bool CommunicationManager::set_mesh_discovery_interval(uint32_t interval_ms) {
+        if (interval_ms < 1000 || interval_ms > 300000) { // 1s to 5 minutes
+            log_communication_event("Invalid discovery interval", std::to_string(interval_ms));
+            return false;
+        }
+
+        // TODO: Update mesh discovery interval
+        log_communication_event("Mesh discovery interval updated", std::to_string(interval_ms) + "ms");
+        return true;
+    }
+
+    bool CommunicationManager::is_mesh_enabled() const {
+        // TODO: Return actual mesh state
+        return true; // Stub
+    }
+
+    uint8_t CommunicationManager::get_mesh_max_hops() const {
+        // TODO: Return actual max hops
+        return 10; // Stub
+    }
+
+// Communication timeout methods
+    bool CommunicationManager::set_communication_timeout(uint32_t timeout_ms) {
+        if (timeout_ms < 100 || timeout_ms > 30000) { // 100ms to 30s
+            log_communication_event("Invalid communication timeout", std::to_string(timeout_ms));
+            return false;
+        }
+
+        // TODO: Update communication timeout
+        log_communication_event("Communication timeout updated", std::to_string(timeout_ms) + "ms");
+        return true;
+    }
+
+    bool CommunicationManager::set_heartbeat_interval(uint32_t interval_ms) {
+        if (interval_ms < 500 || interval_ms > 10000) { // 500ms to 10s
+            log_communication_event("Invalid heartbeat interval", std::to_string(interval_ms));
+            return false;
+        }
+
+        // TODO: Update heartbeat interval
+        log_communication_event("Heartbeat interval updated", std::to_string(interval_ms) + "ms");
+        return true;
+    }
+
+    bool CommunicationManager::set_max_retries(uint8_t max_retries) {
+        if (max_retries > 10) {
+            log_communication_event("Invalid max retries", std::to_string(max_retries));
+            return false;
+        }
+
+        // TODO: Update max retries
+        log_communication_event("Max retries updated", std::to_string(max_retries));
+        return true;
+    }
+
+    uint32_t CommunicationManager::get_communication_timeout() const {
+        // TODO: Return actual timeout
+        return 5000; // Stub - 5 seconds
+    }
+
+    uint32_t CommunicationManager::get_heartbeat_interval() const {
+        // TODO: Return actual interval
+        return 1000; // Stub - 1 second
+    }
+
+    uint8_t CommunicationManager::get_max_retries() const {
+        // TODO: Return actual max retries
+        return 3; // Stub
+    }
+
+// Adaptive power control methods
+    bool CommunicationManager::enable_adaptive_power_control(bool enable) {
+        // TODO: Enable/disable adaptive power thread/mechanism
+        log_communication_event("Adaptive power control", enable ? "enabled" : "disabled");
+        return true;
+    }
+
+    bool CommunicationManager::set_adaptive_power_step(int8_t step_dbm) {
+        if (step_dbm < 1 || step_dbm > 10) {
+            log_communication_event("Invalid adaptive power step", std::to_string(step_dbm));
+            return false;
+        }
+
+        // TODO: Update adaptive power step
+        log_communication_event("Adaptive power step updated", std::to_string(step_dbm) + " dBm");
+        return true;
+    }
+
+    bool CommunicationManager::set_rssi_threshold(double threshold_dbm) {
+        if (threshold_dbm < -120.0 || threshold_dbm > -30.0) {
+            log_communication_event("Invalid RSSI threshold", std::to_string(threshold_dbm));
+            return false;
+        }
+
+        // TODO: Update RSSI threshold for adaptive power
+        log_communication_event("RSSI threshold updated", std::to_string(threshold_dbm) + " dBm");
+        return true;
+    }
+
+    bool CommunicationManager::is_adaptive_power_enabled() const {
+        // TODO: Return actual adaptive power state
+        return true; // Stub
+    }
 } // namespace SwarmControl//
 // Created by yv on 22.09.2025.
 //

@@ -1,344 +1,80 @@
-# Swarm Management System Configuration
-# Система управління роем дронів
-
 system:
-  version: "1.0.1-MVP"
-  max_drones_mvp: 10
-  max_drones_prod: 999
-  operator_location: "ukraine"  # Героям слава!
+  version: "2.0.0-COMBAT"
+  max_drones_mvp: 10                    # ❗ ТРЕБУЕТ ПЕРЕЗАПУСКА
+  operator_location: "ukraine"
 
-# LoRa Communication Configuration
+# LoRa связь - поддерживается GetLoRaFrequencies() и GetPowerConfig()
 lora:
-  primary_frequencies:
-    - 868100000  # 868.1 MHz (EU band)
-    - 868300000  # 868.3 MHz
-    - 868500000  # 868.5 MHz
-    - 915000000  # 915 MHz (если доступна)
+  primary_frequencies:                   # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
+    - 868100000  # 868.1 MHz
+    - 868300000  # 868.3 MHz 
+    - 433050000  # 433.05 MHz
+    - 915000000  # 915 MHz
+  
+  power_levels:                         # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
+    min_power: 0                        # GetPowerConfig()
+    max_power: 30                       # GetPowerConfig() 
+    adaptive_step: 3                    # GetPowerConfig()
+  
+  mesh_config:                          # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
+    enable_mesh: true                   # GetCommunicationConfig()
+  
+  frequency_hopping:                    # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
+    enable: true                        # GetCommunicationConfig()
+    hop_interval: 5000                  # GetCommunicationConfig()
+    noise_threshold: -85.0              # GetCommunicationConfig()
+    interference_threshold: -75.0       # GetCommunicationConfig()
 
-  power_levels:
-    min_power: 0      # dBm
-    max_power: 30     # dBm
-    adaptive_step: 2  # dBm increment
-
-  ground_station:
-    base_power: 10    # dBm при старте
-    max_range: 50000  # метров (50км)
-
-  mesh_network:
-    enable_fallback: true
-    hop_limit: 5
-    mesh_power: 20    # dBm для mesh-режиму
-
-  frequency_hopping:
-    enable: true
-    hop_interval: 5000  # мс
-    noise_threshold: -90  # dBm
-    rssi_threshold: -100  # dBm
-
-# UWB Positioning System
-uwb:
-  frequency: 4900000000  # 4.9 GHz
-  range_accuracy: 0.1    # метров
-  update_rate: 100       # Hz
-  max_range: 1000        # метров между дронами
-
-  formation_control:
-    position_tolerance: 2.0    # метров
-    velocity_tolerance: 1.0    # м/с
-    correction_gain: 0.8       # коэффициент коррекции
-
-# Video Transmission (VTX)
+# Video - поддерживается GetPowerConfig()
 video:
-  vtx_power: 2500  # mW (2.5W максимум)
-  frequencies:
-    - 5740  # A1
-    - 5760  # A2
-    - 5780  # A3
-    - 5800  # A4
-    - 5820  # A5
-    - 5840  # A6
-    - 5860  # A7
-    - 5880  # A8
+  power_levels:                         # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
+    min_power: 25                       # GetPowerConfig()
+    max_power: 2500                     # GetPowerConfig()
+    default_power: 200                  # GetPowerConfig()
 
-  active_streams: 1  # одновременно активных потоков
-  quality_adaptive: true
-  power_management: true
+# UWB позиционирование - поддерживается GetPowerConfig()
+uwb:
+  tx_power: 20                          # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
 
-# Swarm Formation Patterns
-formations:
-  wedge:
-    leader_position: [0, 0, 0]  # относительные координаты
-    followers:
-      - [-10, -10, 0]   # левое крыло
-      - [-10, 10, 0]    # правое крыло
-      - [-20, -15, 0]   # второй ряд лево
-      - [-20, 15, 0]    # второй ряд право
-      - [-30, -20, 0]   # третий ряд лево
-      - [-30, 20, 0]    # третий ряд право
-      - [-20, 0, 0]     # центр второго ряда
-      - [-30, 0, 0]     # центр третьего ряда
-      - [-40, 0, 0]     # хвост
-
-  line:
-    leader_position: [0, 0, 0]
-    spacing: 15  # метров между дронами
-    orientation: "horizontal"  # или "vertical"
-
-  square:
-    leader_position: [0, 0, 0]
-    side_length: 30  # метров
-    formation_3d: false
-
-# Flight Parameters
-flight:
-  safe_altitude: 50      # метров
-  formation_altitude: 100 # метров для формации
-  max_velocity: 25       # м/с
-  max_acceleration: 5    # м/с²
-
-  wind_compensation:
-    max_wind_speed: 15     # м/с
-    correction_factor: 1.2
-    return_threshold: 20   # метров от позиции
-
-# Leadership Management
-leadership:
-  election_timeout: 3000    # мс
-  heartbeat_interval: 500   # мс
-  leader_lost_timeout: 2000 # мс
-
-  priority_criteria:
-    - "battery_level"
-    - "signal_strength"
-    - "system_health"
-    - "position_accuracy"
-
-# Fail-safe and Security
-failsafe:
-  total_communication_loss: 30000  # мс до самоліквідації
-  leader_loss_retries: 3
-  formation_break_threshold: 50    # метров
-
-  self_destruct:
-    enable: true
-    countdown: 10000    # мс
-    confirmation_required: false
-
-  emergency_protocols:
-    rth_disabled: true  # Return To Home відключений (немає GPS)
-    hover_timeout: 5000 # мс перед самоліквідацією
-
-# Anti-EW Measures
-electronic_warfare:
-  frequency_agility: true
-  power_ramping: true
-  radio_silence_capability: true
-
-  detection_thresholds:
-    jamming_detection: -70    # dBm
-    frequency_sweep_rate: 100 # MHz/s
-
-  countermeasures:
-    auto_frequency_hop: true
-    mesh_fallback: true
-    video_stream_priority: false  # відео менш важливе за управління
-
-# System Health Monitoring
-health:
-  battery_critical: 20    # відсотків
-  battery_warning: 30     # відсотків
-  temperature_max: 85     # Цельсія
-  vibration_threshold: 5  # G
-
-  telemetry_rate: 10      # Hz
-  log_level: "INFO"       # DEBUG, INFO, WARN, ERROR
-
-# Security Configuration
+# Безопасность - поддерживается GetCommunicationConfig()
 security:
-  enable_encryption: true
-  shared_secret: "SlavaUkraini2024!"  # Спільний секрет для шифрування
-  key_rotation_interval: 3600000      # мс (1 година)
-  max_message_age: 30000              # мс максимальний вік повідомлення
-  replay_protection: true
+  enable_encryption: true               # ❗ ТРЕБУЕТ ПЕРЕЗАПУСКА
+  shared_secret: "SlavaUkraini2024!"    # ❗ ТРЕБУЕТ ПЕРЕЗАПУСКА
 
-  # Детекція підозрілої активності
-  anomaly_detection:
-    enable: true
-    max_frequency_changes: 10         # за хвилину
-    suspicious_rssi_threshold: -30    # занадто сильний сигнал
-    jamming_detection_sensitivity: 0.8
+# Аварийные процедуры - поддерживается PrintConfigurationSummary()
+failsafe:
+  enable_self_destruct: true            # ❗ ТРЕБУЕТ ПЕРЕЗАПУСКА
 
-  # Аутентифікація дронів
-  drone_authentication:
-    enable: true
-    challenge_timeout: 5000           # мс
-    max_auth_attempts: 3
+# Связь - поддерживается GetCommunicationConfig()
+communication:                         # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
+  timeout_ms: 5000                      # GetCommunicationConfig()
+  heartbeat_interval_ms: 1000           # GetCommunicationConfig()
+  max_retries: 5                        # GetCommunicationConfig()
 
-# Hardware Specific Settings
-hardware:
-  mamba_f722:
-    uart_baudrate: 115200
-    spi_frequency: 8000000
-
-  elrs_nano:
-    packet_rate: 500    # Hz
-    telemetry_ratio: 8  # 1:8
-
-  caddx_ratel:
-    resolution: "1080p30"
-    latency_mode: "ultra_low"
-    bitrate: 25000      # kbps
-
-    power_levels:
-      min_power: 0      # dBm - minimum transmission power
-      max_power: 20     # dBm - maximum transmission power
-      adaptive_step: 2  # dBm - power adjustment step
-
-      mesh_config:
-        enable_mesh: true
-        mesh_fallback: true  # Use mesh when ground station link lost
-        hop_limit: 3
-        mesh_discovery_interval: 5000  # ms
-
-      frequency_hopping:
-        enable: true
-        hop_interval: 10000    # ms - frequency change interval
-        noise_threshold: -80   # dBm - when to trigger frequency change
-        scan_duration: 1000    # ms - time to scan each frequency
-
-    # UWB Configuration for relative positioning
-    uwb:
-      enabled: true
-      update_rate: 100        # Hz - position update rate
-      max_range: 1000        # meters - maximum UWB range
-      accuracy_threshold: 0.3 # meters - required positioning accuracy
-
-      formation_distances:
-        close_formation: 5.0   # meters between drones
-        wide_formation: 15.0   # meters between drones
-        safety_distance: 3.0   # minimum distance to avoid collision
-
-    # Formation patterns
-    formations:
-      available_types:
-        - "wedge"      # клин
-        - "line"       # лінія
-        - "square"     # квадрат
-        - "circle"     # коло
-        - "diamond"    # ромб
-
-      default_formation: "wedge"
-      transition_time: 10.0  # seconds to transition between formations
-
-      wedge:
-        leader_position: [ 0, 0, 0 ]    # relative coordinates
-        positions:
-          - [ 0, 0, 0 ]      # Leader (drone 0)
-          - [ -5, -5, 0 ]    # Left wing
-          - [ 5, -5, 0 ]     # Right wing
-          - [ -10, -10, 0 ]  # Left rear
-          - [ 10, -10, 0 ]   # Right rear
-
-      line:
-        spacing: 10.0  # meters between drones
-        axis: "y"      # line along Y axis
-
-      square:
-        side_length: 20.0  # meters
-        rows: 2
-        cols: 2
-
-    # Video streaming configuration
-    video:
-      vtx_power_levels:
-        min_power: 25      # mW
-        max_power: 2500    # mW (2.5W max from hardware)
-        adaptive: true
-
-      channels:
-        band_a: [ 5865, 5845, 5825, 5805, 5785, 5765, 5745, 5725 ]  # MHz
-        band_b: [ 5733, 5752, 5771, 5790, 5809, 5828, 5847, 5866 ]
-        band_e: [ 5705, 5685, 5665, 5645, 5885, 5905, 5925, 5945 ]
-        band_f: [ 5740, 5760, 5780, 5800, 5820, 5840, 5860, 5880 ]
-
-      default_band: "band_f"
-      auto_channel_selection: true
-      rssi_threshold: -80    # dBm - switch channel when RSSI below this
-
-    # Flight parameters
-    flight:
-      max_velocity: 25.0      # m/s
-      max_acceleration: 10.0  # m/s²
-      formation_height: 100.0 # meters - default formation altitude
-      safety_height: 50.0     # meters - minimum safe altitude
-
-      leader_following:
-        follow_distance: 10.0      # meters behind leader
-        max_deviation: 5.0         # meters max deviation from formation
-        correction_strength: 0.8   # PID controller strength (0.0-1.0)
-
-      wind_compensation:
-        enable: true
-        max_wind_speed: 15.0      # m/s - maximum compensatable wind
-        drift_threshold: 2.0      # meters - when to start wind compensation
-
-    # Failsafe and emergency procedures
-    failsafe:
-      communication_timeout: 5000   # ms - max time without communication
-      leader_loss_timeout: 3000     # ms - time before reassigning leader
-      ground_station_timeout: 30000 # ms - time before autonomous action
-
-      emergency_procedures:
-        lost_communication:
-          action: "follow_last_leader"
-          timeout: 60000  # ms before self_destruct
-
-        leader_destroyed:
-          action: "reassign_leader"
-          new_leader_selection: "closest_to_target"
-
-        mission_compromise:
-          action: "self_destruct"
-          confirmation_required: false
-
-        low_battery:
-          threshold: 20.0  # percent
-          action: "return_to_formation"
-
-    # Hardware-specific settings
-    hardware:
-      mamba_f722:
-        uart_baudrate: 115200
-        telemetry_rate: 50    # Hz
-
-      elrs_2_4ghz:
-        power_output: 100     # mW
-        packet_rate: 250      # Hz
-
-      elrs_915mhz:
-        power_output: 1000    # mW
-        packet_rate: 50       # Hz
-
-    # Mission parameters
-    mission:
-      target_approach:
-        final_approach_distance: 100.0  # meters
-        approach_speed: 10.0            # m/s
-        terminal_guidance_distance: 50.0 # meters - when terminal guidance activates
-
-      waypoint_tolerance: 5.0  # meters
-      mission_timeout: 1800    # seconds (30 minutes)
-
-    # Debug and logging
-    debug:
-      log_level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-      log_file: "/var/log/swarm_control.log"
-      enable_telemetry_logging: true
-      telemetry_log_rate: 10  # Hz
-
-    # Operator interface
-    operator:
-      control_update_rate: 20   # Hz
-      video_feed_priority: true
-      manual_override: false    # In combat mode - no manual override
-      heartbeat_interval: 1000  # ms
+# Формации - поддерживается GetFormationConfig()
+formations:                             # ✅ ГОРЯЧЕЕ ОБНОВЛЕНИЕ
+  wedge:                                # GetFormationConfig(FormationType::WEDGE)
+    positions:
+      - [0, 0, 0]      # Лидер
+      - [-10, -10, 0]  # Левое крыло  
+      - [10, -10, 0]   # Правое крыло
+    spacing: 10.0
+    tolerance: 3.0
+  
+  line:                                 # GetFormationConfig(FormationType::LINE)
+    positions:
+      - [0, 0, 0]
+      - [15, 0, 0]
+      - [30, 0, 0]
+    spacing: 15.0
+    tolerance: 3.0
+  
+  square:                               # GetFormationConfig(FormationType::SQUARE)
+    positions:
+      - [0, 0, 0]      # Center
+      - [-10, -10, 0]  # Front left
+      - [10, -10, 0]   # Front right
+      - [-10, 10, 0]   # Rear left
+      - [10, 10, 0]    # Rear right
+    spacing: 10.0
+    tolerance: 3.0

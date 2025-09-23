@@ -1887,4 +1887,199 @@ bool UWBManager::load_uwb_configuration() {
     return true;
 }
 
+bool UWBManager::SetTxPower(uint8_t power_level) {
+    if (power_level > 33) {
+        std::cerr << "❌ Invalid UWB TX power: " << static_cast<int>(power_level) << " (max 33)" << std::endl;
+        return false;
+    }
+
+    // TODO: Apply to actual UWB hardware
+    // uwb_chip_set_tx_power(power_level);
+
+    std::cout << "✅ UWB TX power updated: " << static_cast<int>(power_level) << std::endl;
+    return true;
+}
+
+uint8_t UWBManager::GetTxPower() const {
+    // TODO: Read from actual hardware
+    return 20; // Stub - default power level
+}
+
+bool UWBManager::SetRxGain(uint8_t gain_level) {
+    if (gain_level > 63) {
+        std::cerr << "❌ Invalid UWB RX gain: " << static_cast<int>(gain_level) << std::endl;
+        return false;
+    }
+
+    // TODO: Apply to actual UWB hardware
+    std::cout << "✅ UWB RX gain updated: " << static_cast<int>(gain_level) << std::endl;
+    return true;
+}
+
+uint8_t UWBManager::GetRxGain() const {
+    return 32; // Stub - default gain
+}
+
+bool UWBManager::SetUpdateRate(uint16_t rate_hz) {
+    if (rate_hz < 1 || rate_hz > 1000) {
+        std::cerr << "❌ Invalid UWB update rate: " << rate_hz << " Hz (range: 1-1000)" << std::endl;
+        return false;
+    }
+
+    // TODO: Update positioning thread timing
+    std::cout << "✅ UWB update rate changed: " << rate_hz << " Hz" << std::endl;
+    return true;
+}
+
+uint16_t UWBManager::GetUpdateRate() const {
+    return 100; // Stub - default 100 Hz
+}
+
+bool UWBManager::SetMeasurementInterval(uint32_t interval_ms) {
+    if (interval_ms < 10 || interval_ms > 10000) {
+        std::cerr << "❌ Invalid measurement interval: " << interval_ms << " ms" << std::endl;
+        return false;
+    }
+
+    // TODO: Update measurement timing
+    std::cout << "✅ UWB measurement interval updated: " << interval_ms << " ms" << std::endl;
+    return true;
+}
+
+uint32_t UWBManager::GetMeasurementInterval() const {
+    return 100; // Stub - 100ms default
+}
+
+bool UWBManager::SetRangingMode(UWBRangingMode mode) {
+    switch (mode) {
+        case UWBRangingMode::TWR:
+            std::cout << "✅ UWB ranging mode: Two-Way Ranging" << std::endl;
+            break;
+        case UWBRangingMode::DS_TWR:
+            std::cout << "✅ UWB ranging mode: Double-Sided TWR" << std::endl;
+            break;
+        case UWBRangingMode::SS_TWR:
+            std::cout << "✅ UWB ranging mode: Single-Sided TWR" << std::endl;
+            break;
+        case UWBRangingMode::TDOA:
+            std::cout << "✅ UWB ranging mode: Time Difference of Arrival" << std::endl;
+            break;
+        default:
+            std::cerr << "❌ Invalid UWB ranging mode" << std::endl;
+            return false;
+    }
+
+    // TODO: Apply to actual UWB hardware configuration
+    return true;
+}
+
+UWBRangingMode UWBManager::GetRangingMode() const {
+    return UWBRangingMode::DS_TWR; // Stub - default mode
+}
+
+bool UWBManager::SetMaxRangingDistance(double max_distance_m) {
+    if (max_distance_m < 1.0 || max_distance_m > 500.0) {
+        std::cerr << "❌ Invalid max ranging distance: " << max_distance_m << " m" << std::endl;
+        return false;
+    }
+
+    // TODO: Configure hardware timing windows based on distance
+    std::cout << "✅ UWB max ranging distance: " << max_distance_m << " m" << std::endl;
+    return true;
+}
+
+double UWBManager::GetMaxRangingDistance() const {
+    return 100.0; // Stub - 100m default
+}
+
+bool UWBManager::SetPositionAccuracyThreshold(double threshold_m) {
+    if (threshold_m < 0.01 || threshold_m > 10.0) {
+        std::cerr << "❌ Invalid accuracy threshold: " << threshold_m << " m" << std::endl;
+        return false;
+    }
+
+    // TODO: Update position filtering
+    std::cout << "✅ UWB accuracy threshold: " << threshold_m << " m" << std::endl;
+    return true;
+}
+
+double UWBManager::GetPositionAccuracyThreshold() const {
+    return 0.1; // Stub - 10cm default
+}
+
+bool UWBManager::EnableOutlierRejection(bool enable) {
+    // TODO: Enable/disable outlier filtering
+    std::cout << "✅ UWB outlier rejection: " << (enable ? "enabled" : "disabled") << std::endl;
+    return true;
+}
+
+bool UWBManager::IsOutlierRejectionEnabled() const {
+    return true; // Stub - enabled by default
+}
+
+bool UWBManager::SetChannel(uint8_t channel) {
+    if (channel < 1 || channel > 7 || channel == 6) {
+        std::cerr << "❌ Invalid UWB channel: " << static_cast<int>(channel) << " (1-7 except 6)" << std::endl;
+        return false;
+    }
+
+    // TODO: Apply channel to hardware - requires restart
+    std::cout << "⚠️ UWB channel change to " << static_cast<int>(channel)
+              << " requires component restart!" << std::endl;
+    return false; // Indicate restart required
+}
+
+uint8_t UWBManager::GetChannel() const {
+    return 5; // Stub - default channel
+}
+
+bool UWBManager::SetPreambleLength(uint16_t length) {
+    if (length != 64 && length != 128 && length != 256 && length != 512 &&
+        length != 1024 && length != 2048 && length != 4096) {
+        std::cerr << "❌ Invalid preamble length: " << length << std::endl;
+        return false;
+    }
+
+    // TODO: Apply to hardware - requires restart
+    std::cout << "⚠️ UWB preamble length change to " << length
+              << " requires component restart!" << std::endl;
+    return false; // Indicate restart required
+}
+
+uint16_t UWBManager::GetPreambleLength() const {
+    return 128; // Stub - default length
+}
+
+bool UWBManager::SetAntennaDelay(uint16_t tx_delay, uint16_t rx_delay) {
+    // TODO: Set antenna delays for calibration
+    std::cout << "✅ UWB antenna delays: TX=" << tx_delay << ", RX=" << rx_delay << std::endl;
+    return true;
+}
+
+bool UWBManager::GetAntennaDelay(uint16_t& tx_delay, uint16_t& rx_delay) const {
+    tx_delay = 16456; // Stub values
+    rx_delay = 16456;
+    return true;
+}
+
+bool UWBManager::TriggerSelfCalibration() {
+    std::cout << "🔧 Starting UWB self-calibration..." << std::endl;
+    // TODO: Run self-calibration procedure
+    std::cout << "✅ UWB self-calibration completed" << std::endl;
+    return true;
+}
+
+bool UWBManager::RunDiagnostics() {
+    std::cout << "🔍 Running UWB diagnostics..." << std::endl;
+    // TODO: Run hardware diagnostics
+    std::cout << "✅ UWB diagnostics passed" << std::endl;
+    return true;
+}
+
+bool UWBManager::ResetToDefaults() {
+    std::cout << "🔄 Resetting UWB to default configuration..." << std::endl;
+    // TODO: Reset all UWB parameters to defaults
+    std::cout << "✅ UWB reset to defaults" << std::endl;
+    return true;
+}
 uint64

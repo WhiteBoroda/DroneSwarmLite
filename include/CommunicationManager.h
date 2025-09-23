@@ -149,6 +149,50 @@ namespace SwarmControl {
         bool configure_antennas();
         bool check_hardware_status();
 
+        // Power management - hot reload support
+        bool set_max_power_level(int8_t max_power_dbm);
+        bool set_min_power_level(int8_t min_power_dbm);
+        bool set_current_power_level(int8_t power_dbm);
+        int8_t get_max_power_level() const;
+        int8_t get_min_power_level() const;
+        int8_t get_current_power_level() const;
+
+        // Frequency management - hot reload support
+        bool update_frequency_list(const std::vector<uint32_t>& new_frequencies);
+        bool add_frequency(uint32_t frequency);
+        bool remove_frequency(uint32_t frequency);
+        std::vector<uint32_t> get_frequency_list() const;
+        bool set_primary_frequency(uint32_t frequency);
+        uint32_t get_current_frequency() const;
+
+// Frequency hopping control - hot reload support
+        bool enable_frequency_hopping(bool enable);
+        bool set_frequency_hop_interval(uint32_t interval_ms);
+        bool set_interference_threshold(double threshold_dbm);
+        bool is_frequency_hopping_enabled() const;
+        uint32_t get_frequency_hop_interval() const;
+
+// Mesh networking control - hot reload support
+        bool enable_mesh_networking(bool enable);
+        bool set_mesh_max_hops(uint8_t max_hops);
+        bool set_mesh_discovery_interval(uint32_t interval_ms);
+        bool is_mesh_enabled() const;
+        uint8_t get_mesh_max_hops() const;
+
+// Communication timeouts - hot reload support
+        bool set_communication_timeout(uint32_t timeout_ms);
+        bool set_heartbeat_interval(uint32_t interval_ms);
+        bool set_max_retries(uint8_t max_retries);
+        uint32_t get_communication_timeout() const;
+        uint32_t get_heartbeat_interval() const;
+        uint8_t get_max_retries() const;
+
+// Adaptive power control - hot reload support
+        bool enable_adaptive_power_control(bool enable);
+        bool set_adaptive_power_step(int8_t step_dbm);
+        bool set_rssi_threshold(double threshold_dbm);
+        bool is_adaptive_power_enabled() const;
+
     private:
         // Core identification
         DroneId drone_id_;
@@ -177,6 +221,7 @@ namespace SwarmControl {
         mutable std::mutex incoming_mutex_;
         mutable std::mutex priority_mutex_;
 
+
         std::condition_variable tx_cv_;
         std::condition_variable rx_cv_;
 
@@ -201,6 +246,7 @@ namespace SwarmControl {
         std::unordered_map<DroneId, MeshNode> mesh_neighbors_;
         std::unordered_map<DroneId, std::vector<DroneId>> mesh_routes_;
         mutable std::mutex mesh_mutex_;
+        mutable std::mutex freq_mutex_;
 
         // Communication parameters
         LoRaConfig current_lora_config_;
