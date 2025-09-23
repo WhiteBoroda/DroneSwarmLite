@@ -65,7 +65,11 @@ set(SWARM_CONTROL_SOURCES
         src/MeshProtocol.cpp
         src/DistributedPositioning.cpp
         src/AutonomousDroneAgent.cpp
+        src/CommunicationManager.cpp
+        src/CommunicationSystem.cpp
         src/UWBManager.cpp
+        src/UWBCryptoSync.cpp
+        src/LoRaSystem.cpp
         src/ConfigManager.cpp
         src/CryptoManager.cpp
 
@@ -75,6 +79,10 @@ set(SWARM_CONTROL_SOURCES
 
 set(SWARM_CONTROL_HEADERS
         include/SwarmTypes.h
+        include/CommunicationManager.h
+        include/LoRaSystem.h
+        include/SwarmTypes.h
+        include/UWBCryptoSync.h
         include/MeshProtocol.h
         include/DistributedPositioning.h
         include/AutonomousDroneAgent.h
@@ -253,6 +261,10 @@ set(SWARM_CONTROL_HEADERS
         include/MathUtils.h
         include/HardwareInterface.h
         src/CryptoManager.cpp
+        src/UWBCryptoSync.cpp
+        include/UWBCryptoSync.h
+        include/LoRaSystem.h
+        src/LoRaSystem.cpp
 )
 
 # Create main executable

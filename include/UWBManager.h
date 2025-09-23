@@ -1,309 +1,285 @@
+// include/UWBManager.h
+// Заголовочний файл для UWB менеджера з криптографією та синхронізацією
+// Production система позиціонування для дронів-камікадзе
+// 🇺🇦 Slava Ukraini! Death to moscow occupants! 🇺🇦
+
 #pragma once
 
 #include "SwarmTypes.h"
-#include <thread>
+#include "UWBCryptoSync.h"
+#include <memory>
+#include <vector>
 #include <atomic>
 #include <mutex>
-#include <condition_variable>
+#include <thread>
 #include <deque>
-#include <unordered_map>
+#include <functional>
+#include <chrono>
 
 namespace SwarmControl {
 
-// UWB ranging methods
-    enum class UWBRangingMode : uint8_t {
+// Forward declarations
+    class UWBCrypto;
+    class UWBTimeSync;
+    using DroneID = uint16_t;
+    using Timestamp = std::chrono::steady_clock::time_point;
+
+// UWB Configuration
+    struct UWBConfig {
+        uint8_t channel;            // UWB channel (1-7, except 6)
+        uint8_t preamble_code;      // Preamble code (1-24)
+        uint8_t data_rate;          // 0=110k, 1=850k, 2=6.8M
+        uint16_t preamble_length;   // Preamble length
+        uint8_t pac_size;           // Preamble acquisition chunk size
+        uint8_t tx_power;           // TX power (0-33)
+        bool smart_power;           // Smart power control
+        uint16_t antenna_delay_tx;  // TX antenna delay
+        uint16_t antenna_delay_rx;  // RX antenna delay
+
+        UWBConfig() {
+            channel = 5;
+            preamble_code = 9;
+            data_rate = 2;
+            preamble_length = 128;
+            pac_size = 8;
+            tx_power = 33;            // Maximum power for combat range
+            smart_power = true;
+            antenna_delay_tx = 16456;
+            antenna_delay_rx = 16456;
+        }
+    };
+
+// 3D Position
+    struct Position3D {
+        double x, y, z;
+
+        Position3D() : x(0.0), y(0.0), z(0.0) {}
+        Position3D(double x_, double y_, double z_) : x(x_), y(y_), z(z_) {}
+
+        double distance_to(const Position3D& other) const {
+            double dx = x - other.x;
+            double dy = y - other.y;
+            double dz = z - other.z;
+            return std::sqrt(dx*dx + dy*dy + dz*dz);
+        }
+    };
+
+// UWB Ranging modes
+    enum class UWBRangingMode {
         TWR,        // Two-Way Ranging
         DS_TWR,     // Double-Sided Two-Way Ranging
-        SDS_TWR,    // Symmetric Double-Sided Two-Way Ranging
-        TDoA        // Time Difference of Arrival
+        SS_TWR,     // Single-Sided Two-Way Ranging
+        TDOA        // Time Difference of Arrival
     };
 
-// UWB configuration parameters
-    struct UWBConfig {
-        uint8_t channel;           // UWB channel (1, 2, 3, 4, 5, 7)
-        uint8_t preamble_code;     // Preamble code (1-24)
-        uint8_t data_rate;         // Data rate (110k, 850k, 6.8M)
-        uint16_t preamble_length;  // Preamble length
-        uint8_t pac_size;          // Preamble acquisition chunk size
-        bool smart_power;          // Smart transmit power control
-        uint8_t tx_power;          // Transmit power setting
+// UWB measurement structure
+    struct UWBMeasurement {
+        DroneID target_drone;
+        double distance;
+        double accuracy;
+        double signal_power;
+        uint64_t timestamp_ns;
+        Timestamp timestamp;
+        bool valid;
 
-        UWBConfig() : channel(5), preamble_code(9), data_rate(2),
-                      preamble_length(128), pac_size(8), smart_power(true), tx_power(15) {}
+        UWBMeasurement() {
+            target_drone = 0;
+            distance = 0.0;
+            accuracy = 999.0;
+            signal_power = -100.0;
+            timestamp_ns = 0;
+            timestamp = std::chrono::steady_clock::now();
+            valid = false;
+        }
     };
 
-// UWB anchor information (for absolute positioning if available)
-    struct UWBAnchor {
-        uint16_t anchor_id;
-        Position3D known_position;
-        bool active;
-        double clock_offset;
-        Timestamp last_seen;
-        int8_t signal_strength;
-    };
-
-// UWB node information for other drones
+// UWB node information
     struct UWBNode {
         DroneID drone_id;
-        uint16_t uwb_address;
-        Position3D estimated_position;
-        bool position_valid;
+        Position3D position;
+        double last_distance;
+        double position_accuracy;
         Timestamp last_measurement;
-        double measurement_quality;
-        std::deque<UWBMeasurement> measurement_history;
+        Timestamp last_position_update;
+        bool position_valid;
+        bool is_anchor;
+        double signal_strength;
+
+        UWBNode() {
+            drone_id = 0;
+            last_distance = 0.0;
+            position_accuracy = 999.0;
+            last_measurement = std::chrono::steady_clock::now();
+            last_position_update = last_measurement;
+            position_valid = false;
+            is_anchor = false;
+            signal_strength = -100.0;
+        }
     };
 
 // Trilateration result
     struct TrilaterationResult {
         Position3D position;
-        double accuracy;         // meters - estimated accuracy
-        double confidence;       // 0-1, confidence in result
-        size_t measurements_used;
+        double accuracy;
+        double confidence;
         bool valid;
 
-        TrilaterationResult() : accuracy(999.0), confidence(0.0), measurements_used(0), valid(false) {}
+        TrilaterationResult() {
+            accuracy = 999.0;
+            confidence = 0.0;
+            valid = false;
+        }
     };
 
-// UWB network statistics
+// Network statistics
     struct UWBNetworkStats {
-        size_t total_nodes;
-        size_t active_nodes;
-        size_t total_measurements;
-        double average_range_accuracy;
-        double measurement_rate;    // Hz
-        uint32_t failed_measurements;
-        double network_sync_quality;
+        uint32_t packets_sent;
+        uint32_t packets_received;
+        uint32_t packets_lost;
+        uint32_t ranging_requests;
+        uint32_t ranging_responses;
+        uint32_t successful_ranges;
+        double average_accuracy;
+        double network_coverage;
         Timestamp last_full_update;
+
+        UWBNetworkStats() {
+            memset(this, 0, sizeof(UWBNetworkStats));
+            last_full_update = std::chrono::steady_clock::now();
+        }
     };
 
+// Main UWB Manager class
     class UWBManager {
-    public:
-        explicit UWBManager(DroneID drone_id, const std::string& config_path);
-        ~UWBManager();
-
-        // Core lifecycle
-        bool initialize();
-        bool start();
-        void stop();
-        void reset();
-
-        // Network management
-        bool join_uwb_network();
-        bool leave_uwb_network();
-        bool discover_nodes();
-        std::vector<UWBNode> get_visible_nodes() const;
-        bool add_node(DroneID drone_id, uint16_t uwb_address);
-        bool remove_node(DroneID drone_id);
-
-        // Ranging operations
-        bool range_to_node(DroneID target_drone);
-        bool range_to_all_nodes();
-        std::vector<UWBMeasurement> get_latest_measurements() const;
-        UWBMeasurement get_measurement_to_drone(DroneID drone_id) const;
-
-        // Position calculation
-        bool update_relative_positions();
-        Position3D get_relative_position(DroneID reference_drone) const;
-        Position3D get_estimated_position() const;
-        TrilaterationResult calculate_position_trilateration();
-
-        // Anchor-based positioning (if anchors available)
-        bool add_anchor(const UWBAnchor& anchor);
-        bool remove_anchor(uint16_t anchor_id);
-        std::vector<UWBAnchor> get_anchors() const;
-        bool calculate_absolute_position();
-
-        // Network synchronization
-        bool synchronize_network_time();
-        bool is_network_synchronized() const;
-        double get_clock_offset() const;
-        bool set_master_clock(bool is_master);
-
-        // Configuration and calibration
-        bool set_uwb_config(const UWBConfig& config);
-        UWBConfig get_uwb_config() const;
-        bool calibrate_ranging();
-        bool perform_antenna_delay_calibration();
-
-        // Quality monitoring
-        double get_ranging_accuracy() const;
-        double get_measurement_rate() const;
-        bool is_measurement_quality_good() const;
-        UWBNetworkStats get_network_statistics() const;
-
-        // Formation support
-        bool monitor_formation_distances();
-        std::vector<double> get_formation_distances() const;
-        bool detect_formation_violations();
-        bool calculate_formation_center() const;
-
-        // Collision avoidance support
-        std::vector<DroneID> get_nearby_drones(double max_distance) const;
-        bool is_collision_risk(double safety_distance = 3.0) const;
-        DroneID get_closest_drone() const;
-        double get_distance_to_closest_drone() const;
-
-        // Data export and logging
-        bool export_measurements(const std::string& filename) const;
-        bool log_uwb_data() const;
-
     private:
+        // Core components
         DroneID drone_id_;
         std::string config_path_;
         uint16_t uwb_address_;
 
-        // UWB hardware interface
-        class DW1000Interface; // DecaWave DW1000 UWB module
+        // Hardware interface
+        class DW1000Interface;
         std::unique_ptr<DW1000Interface> uwb_hardware_;
+
+        // Crypto and sync components
+        std::unique_ptr<UWBCrypto> crypto_engine_;
+        std::unique_ptr<UWBTimeSync> time_sync_;
 
         // Configuration
         UWBConfig current_config_;
         mutable std::mutex config_mutex_;
 
-        // Network nodes management
-        std::unordered_map<DroneID, UWBNode> uwb_nodes_;
-        std::vector<UWBAnchor> uwb_anchors_;
-        mutable std::timed_mutex nodes_mutex_;
+        // State management
+        std::atomic<bool> running_;
+        std::atomic<bool> is_master_clock_;
+        std::atomic<double> clock_offset_;
+        std::atomic<bool> network_synchronized_;
 
-        // Measurements storage
+        // Positioning
+        UWBRangingMode ranging_mode_;
+        Position3D estimated_position_;
+        std::atomic<double> ranging_accuracy_;
+        std::atomic<double> measurement_rate_;
+
+        // Network management
+        std::map<DroneID, UWBNode> uwb_nodes_;
+        std::mutex nodes_mutex_;
+
+        // Measurement storage
         std::deque<UWBMeasurement> measurement_buffer_;
         mutable std::mutex measurements_mutex_;
         static constexpr size_t MAX_MEASUREMENT_HISTORY = 1000;
 
+        // Statistics
+        UWBNetworkStats network_stats_;
 
+        // Worker threads
+        std::thread ranging_thread_;
+        std::thread position_thread_;
+        std::thread sync_thread_;
 
-        // Position tracking
-        mutable std::mutex position_mutex_;
-        Position3D estimated_position_;
-        TrilaterationResult last_trilateration_;
-        Timestamp last_position_update_;
+        // Timeouts and intervals
+        static constexpr auto NODE_TIMEOUT = std::chrono::seconds(5);
+        static constexpr auto RANGING_INTERVAL = std::chrono::milliseconds(100);
+        static constexpr auto POSITION_CALC_INTERVAL = std::chrono::milliseconds(50);
+
+    public:
+        // Constructor/Destructor
+        explicit UWBManager(DroneID drone_id, const std::string& config_path = "");
+        ~UWBManager();
+
+        // Core lifecycle
+        bool initialize();
+        bool start();
+        bool stop();
+        bool is_running() const { return running_.load(); }
+
+        // Crypto and time sync initialization
+        bool initialize_crypto(const std::string& shared_secret);
+        bool initialize_time_sync(bool is_master = false);
+
+        // Ranging operations
+        bool range_to_drone(DroneID target_drone, double& distance, double& accuracy);
+        bool broadcast_range_request();
+        std::vector<UWBMeasurement> get_latest_measurements(size_t count = 10) const;
+        bool start_continuous_ranging();
+        bool stop_continuous_ranging();
+
+        // Position calculation
+        bool calculate_position(Position3D& position, double& accuracy);
+        bool update_position_from_measurements();
+        Position3D get_estimated_position() const { return estimated_position_; }
+        double get_position_accuracy() const { return ranging_accuracy_.load(); }
+
+        // Network management
+        bool add_uwb_node(DroneID drone_id, const Position3D& initial_position = Position3D());
+        bool remove_uwb_node(DroneID drone_id);
+        std::vector<DroneID> get_detected_nodes() const;
+        std::map<DroneID, UWBNode> get_all_nodes() const;
+        bool update_node_position(DroneID drone_id, const Position3D& position);
 
         // Network synchronization
-        std::atomic<bool> is_master_clock_;
-        std::atomic<double> clock_offset_;
-        std::atomic<bool> network_synchronized_;
-        Timestamp last_sync_time_;
+        bool is_network_synchronized() const;
+        double get_clock_offset() const;
+        bool set_master_clock(bool is_master);
+        bool synchronize_with_network();
 
-        // Threading
-        std::thread ranging_thread_;
-        std::thread position_calculation_thread_;
-        std::thread sync_thread_;
-        std::atomic<bool> running_;
+        // Configuration
+        bool set_uwb_config(const UWBConfig& config);
+        UWBConfig get_uwb_config() const;
+        bool reload_configuration();
 
-        std::condition_variable ranging_cv_;
-        std::condition_variable position_cv_;
-        std::mutex ranging_mutex_;
-        std::mutex position_calc_mutex_;
-
-        // Statistics and monitoring
-        UWBNetworkStats network_stats_;
-        mutable std::mutex stats_mutex_;
-
-        // Ranging parameters
-        UWBRangingMode ranging_mode_;
-        std::atomic<double> ranging_accuracy_;
-        std::atomic<double> measurement_rate_;
-
-        // Timing constants
-        static constexpr Duration RANGING_PERIOD = std::chrono::milliseconds(100);        // 10Hz
-        static constexpr Duration POSITION_UPDATE_PERIOD = std::chrono::milliseconds(50); // 20Hz
-        static constexpr Duration SYNC_PERIOD = std::chrono::seconds(10);                 // 0.1Hz
-        static constexpr Duration NODE_TIMEOUT = std::chrono::seconds(5);
-
-        // Private methods - Main loops
-        void ranging_loop();
-        void position_calculation_loop();
-        void synchronization_loop();
-
-        // Ranging implementation
-        bool perform_two_way_ranging(DroneID target_drone);
-        bool perform_double_sided_twr(DroneID target_drone);
-        bool perform_symmetric_double_sided_twr(DroneID target_drone);
-        bool perform_tdoa_measurement();
-
-        // Message handling for UWB protocol
-        bool send_ranging_request(DroneID target_drone);
-        bool send_ranging_response(DroneID requesting_drone, uint64_t request_timestamp);
-        bool process_ranging_message(const std::vector<uint8_t>& message);
-
-        // Position calculation algorithms
-        bool calculate_trilateration_2d(const std::vector<UWBMeasurement>& measurements,
-                                        TrilaterationResult& result);
-        bool calculate_trilateration_3d(const std::vector<UWBMeasurement>& measurements,
-                                        TrilaterationResult& result);
-        bool calculate_multilateration(const std::vector<UWBMeasurement>& measurements,
-                                       TrilaterationResult& result);
-
-        // Geometric calculations
-        bool solve_trilateration_equations(const std::vector<Position3D>& positions,
-                                           const std::vector<double>& distances,
-                                           Position3D& result);
-        double calculate_position_error(const Position3D& estimated_pos,
-                                        const std::vector<UWBMeasurement>& measurements);
-
-        // Network management helpers
-        bool discover_uwb_devices();
-        bool validate_node_measurements();
-        bool clean_stale_measurements();
-        bool update_node_positions();
-
-        // Synchronization helpers
-        bool send_sync_beacon();
-        bool process_sync_message(const std::vector<uint8_t>& message);
-        bool calculate_clock_drift();
-        uint64_t get_synchronized_timestamp();
-
-        // Hardware abstraction
-        bool initialize_uwb_hardware();
-        bool configure_uwb_parameters();
-        bool set_uwb_channel(uint8_t channel);
-        bool set_transmit_power(uint8_t power_level);
-        bool read_uwb_timestamp(uint64_t& timestamp);
-
-        // Calibration procedures
-        bool perform_distance_calibration();
+        // Calibration
+        bool calibrate_ranging();
         bool calibrate_antenna_delays();
-        bool measure_crystal_offset();
-        bool validate_calibration_results();
+        bool save_calibration_data();
+        bool load_calibration_data();
 
-        // Quality assessment
-        bool assess_measurement_quality(const UWBMeasurement& measurement);
-        double calculate_measurement_variance();
-        bool detect_multipath_interference();
-        bool filter_outlier_measurements();
+        // Monitoring and diagnostics
+        UWBNetworkStats get_network_statistics() const;
+        double get_measurement_rate() const { return measurement_rate_.load(); }
+        bool perform_self_test();
+        std::string get_status_report() const;
 
-        // Formation monitoring helpers
-        bool check_formation_geometry();
-        std::vector<double> calculate_inter_drone_distances();
-        bool detect_formation_drift();
-        Position3D calculate_formation_centroid();
+        // Data export and logging
+        bool export_measurements(const std::string& filename) const;
+        bool log_uwb_data() const;
 
-        // Collision detection algorithms
-        bool predict_collision_trajectory(DroneID other_drone, double time_horizon);
-        double calculate_closest_approach_distance(DroneID other_drone);
-        bool is_on_collision_course(DroneID other_drone, double safety_margin);
+        // Encrypted communication
+        bool send_encrypted_packet(DroneID target_drone, const uint8_t* data, size_t data_len);
+        bool receive_encrypted_packet(uint8_t* data, size_t& data_len, DroneID& sender_drone);
 
-        // Data management
-        bool store_measurement(const UWBMeasurement& measurement);
-        void cleanup_old_measurements();
-        bool export_measurement_data(const std::string& filename);
+    private:
+        // Internal worker methods
+        void ranging_worker();
+        void position_calculation_worker();
+        void time_sync_worker();
 
-        // Error handling and recovery
-        bool handle_ranging_failure(DroneID target_drone);
-        bool attempt_hardware_recovery();
-        bool switch_to_backup_ranging_mode();
-        bool report_uwb_error(const std::string& error_description);
-
-        // Utility methods
-        double calculate_distance_3d(const Position3D& pos1, const Position3D& pos2) const;
-        bool is_position_reasonable(const Position3D& position);
-        double calculate_measurement_age(const UWBMeasurement& measurement);
-        bool is_measurement_fresh(const UWBMeasurement& measurement);
-        double calculate_measurement_quality(uint64_t round_trip_time, uint64_t response_time) const;
-        double calculate_measurement_quality_for_node(DroneID drone_id) const;
-        void update_network_statistics();
-
-// Advanced trilateration methods
+        // Trilateration algorithms
+        bool calculate_trilateration_2d(const std::vector<std::pair<DroneID, double>>& measurements,
+                                        TrilaterationResult& result);
+        bool calculate_trilateration_3d(const std::vector<std::pair<DroneID, double>>& measurements,
+                                        TrilaterationResult& result);
         bool calculate_trilateration_3d_anchors(const std::vector<Position3D>& anchor_positions,
                                                 const std::vector<double>& distances,
                                                 TrilaterationResult& result);
@@ -311,20 +287,22 @@ namespace SwarmControl {
                                                      const std::vector<double>& distances,
                                                      TrilaterationResult& result);
 
+        // Advanced algorithms
+        Position3D calculate_bancroft_solution(const std::vector<Position3D>& anchors,
+                                               const std::vector<double>& distances);
+        double calculate_gdop(const std::vector<Position3D>& anchors, const Position3D& position);
 
-        // Configuration helpers
+        // Utility methods
+        double calculate_distance_3d(const Position3D& pos1, const Position3D& pos2) const;
+        double calculate_measurement_quality(uint64_t round_trip_time, uint64_t response_time) const;
+        double calculate_measurement_quality_for_node(DroneID drone_id) const;
+        bool store_measurement(const UWBMeasurement& measurement);
         bool load_uwb_configuration();
-        bool validate_uwb_parameters();
-        bool apply_configuration_changes();
-        bool save_calibration_data();
-
-        // Logging and diagnostics
-        void log_uwb_event(const std::string& event, const std::string& details = "");
-        void log_measurement_data(const UWBMeasurement& measurement);
-        void log_position_calculation(const TrilaterationResult& result);
-        bool generate_uwb_diagnostics_report();
-
+        uint64_t get_synchronized_timestamp();
+        bool clean_stale_measurements();
+        bool validate_node_measurements();
+        bool update_network_statistics();
+        bool synchronize_network_time();
     };
 
-} // namespace SwarmControl//
-
+} // namespace SwarmControl
