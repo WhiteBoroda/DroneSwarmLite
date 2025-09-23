@@ -1,0 +1,372 @@
+# .gitignore для C++ проекта с CLion
+
+#########################
+# CLion IDE Files
+#########################
+.idea/
+*.iml
+*.ipr
+*.iws
+cmake-build-*/
+.clion.source.upload.marker
+
+#########################
+# CMake Build Files
+#########################
+build/
+Build/
+BUILD/
+cmake-build-debug/
+cmake-build-release/
+cmake-build-relwithdebinfo/
+cmake-build-minsizerel/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+#########################
+# C++ Compiled Files
+#########################
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+#########################
+# Visual Studio Code
+#########################
+.vscode/
+*.code-workspace
+
+#########################
+# VS/Visual Studio
+#########################
+*.vs/
+*.vcxproj.user
+*.vcxproj.filters
+*.vcxproj
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.VC.opendb
+
+#########################
+# Qt Creator
+#########################
+*.autosave
+*.pro.user
+*.pro.user.*
+CMakeLists.txt.user*
+
+#########################
+# Code::Blocks
+#########################
+*.layout
+*.depend
+*.cbp
+
+#########################
+# Dev-C++
+#########################
+*.dev
+
+#########################
+# Package Managers
+#########################
+# Conan
+conaninfo.txt
+conanfile.txt.backup
+conanbuildinfo.*
+graph_info.json
+.conan/
+
+# vcpkg
+vcpkg_installed/
+.vcpkg-root
+
+# CPM
+_deps/
+
+#########################
+# Testing Frameworks
+#########################
+# Google Test
+googletest-*
+gtest/
+gmock/
+
+# Catch2
+tests/catch2/
+
+# Test results
+test_results/
+test_detail.xml
+test_results.xml
+*.gcov
+*.gcda
+*.gcno
+
+#########################
+# Documentation
+#########################
+doc/html/
+doc/latex/
+docs/html/
+docs/latex/
+Doxyfile.bak
+doxygen_warnings.log
+
+#########################
+# Temporary Files
+#########################
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+#########################
+# OS Generated Files
+#########################
+# Windows
+*.stackdump
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.nfs*
+
+#########################
+# Archives
+#########################
+*.7z
+*.gz
+*.rar
+*.tar
+*.zip
+
+#########################
+# Logs and Databases
+#########################
+*.log
+*.sql
+*.sqlite
+*.db
+
+#########################
+# Configuration Files (selective)
+#########################
+# Keep template configs, ignore local configs
+config/local_*
+config/*.local.*
+*.local.yaml
+*.local.json
+secrets.yaml
+secrets.json
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+#########################
+# Static Analysis
+#########################
+# Clang tools
+compile_flags.txt
+.clang-format
+.clang-tidy
+*.clang-format.bak
+
+# Cppcheck
+cppcheck-results.xml
+
+# PVS-Studio
+PVS-Studio.log
+
+#########################
+# Profiling & Debugging
+#########################
+# Valgrind
+*.valgrind
+callgrind.out.*
+massif.out.*
+
+# GDB
+.gdb_history
+core
+core.*
+
+# Performance
+*.prof
+*.perf
+perf.data*
+
+#########################
+# Build Artifacts
+#########################
+bin/
+lib/
+libs/
+dependencies/
+external/
+third_party/*/build/
+third_party/*/Build/
+
+# Keep third party source but not builds
+!third_party/*/src/
+!third_party/*/include/
+
+#########################
+# Project Specific
+#########################
+# Hardware builds
+firmware/build/
+firmware/.pio/
+firmware/.vscode/
+
+# Config outputs
+generated_config.*
+auto_generated.*
+
+# Simulation data
+simulation_output/
+*.sim
+*.trace
+
+# Custom project artifacts
+drone_logs/
+telemetry_data/
+uwb_calibration_data/
+formation_logs/
+
+#########################
+# Security
+#########################
+# Keys and certificates
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# SSH
+.ssh/
+known_hosts
+
+#########################
+# Backup Files
+#########################
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+
+#########################
+# IDE Extensions
+#########################
+# Vim
+*.swp
+*.swo
+.vim/
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+#########################
+# Docker
+#########################
+.dockerignore
+docker-compose.override.yml
+.docker/
+
+#########################
+# CI/CD
+#########################
+.github/workflows/secrets/
+.gitlab-ci.local.yml
+.travis.yml.local
+
+#########################
+# Final Notes
+#########################
+# Remember to commit:
+# - README.md
+# - CMakeLists.txt
+# - source files (*.cpp, *.h)
+# - config templates (config.template.yaml)
+# - documentation
+# - build scripts
+
+# Always ignore:
+# - Build artifacts
+# - IDE settings (except shared team settings)
+# - Local configurations
+# - Temporary files
+# - Secret keys
