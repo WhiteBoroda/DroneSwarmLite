@@ -70,6 +70,7 @@ set(SWARM_CONTROL_SOURCES
 
         # Utility and helper files
         src/SwarmTypes.cpp
+        src/AutonomousDroneAgent.cpp
 )
 
 set(SWARM_CONTROL_HEADERS
@@ -84,6 +85,9 @@ set(SWARM_CONTROL_HEADERS
         include/UWBManager.h
         include/ConfigManager.h
         include/CryptoManager.h
+        firmware/drone_firmware/include/UWBManager_ESP32.h
+        firmware/drone_firmware/src/UWBManager_ESP32.cpp
+        src/AutonomousDroneAgent.cpp
 )
 
 # Create main executable

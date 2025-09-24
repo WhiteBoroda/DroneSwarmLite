@@ -7,7 +7,23 @@
 namespace SwarmSystem {
 
     AutonomousDroneAgent::AutonomousDroneAgent(DroneID id)
-            : my_id_(id), mission_state_(MissionState::IDLE), current_waypoint_index_(0) {
+        : my_id_(id)
+        , mission_state_(MissionState::IDLE)
+        , current_waypoint_index_(0)
+        , flight_controller_(nullptr)
+        , target_detector_(nullptr)
+        , mesh_protocol_(nullptr)
+        , comm_manager_(nullptr)
+        , last_movement_command_(std::chrono::steady_clock::now())
+        , last_target_check_(std::chrono::steady_clock::now())
+        , last_status_broadcast_(std::chrono::steady_clock::now())
+        , movement_timeout_(std::chrono::seconds(30))
+        , target_check_interval_(std::chrono::milliseconds(500))
+        , status_broadcast_interval_(std::chrono::seconds(5))
+        , max_velocity_(15.0) // 15 м/с максимальная скорость
+        , approach_threshold_(2.0) // 2 метра - считаем что достигли точки
+        , emergency_altitude_(50.0) // 50м - аварийная высота
+        , last_position_update_(std::chrono::steady_clock::now()) {
 
         // Ініціалізація стану
         current_state_.id = my_id_;
@@ -15,6 +31,10 @@ namespace SwarmSystem {
         current_state_.is_autonomous = true;
         current_state_.can_lead = true;
         current_state_.is_healthy = true;
+        current_state_.position = Position3D(0, 0, 0);
+        current_state_.velocity = Velocity3D(0, 0, 0);
+        current_state_.battery_level = 100;
+        current_state_.comm_status = CommunicationStatus::CONNECTED;
 
         std::cout << "🤖 Створено автономного агента для дрона " << my_id_ << std::endl;
     }
@@ -23,17 +43,24 @@ namespace SwarmSystem {
         try {
             // Ініціалізація підсистем автономії
             obstacle_avoidance_ = std::make_shared<ObstacleAvoidance>();
+            if (!obstacle_avoidance_->Initialize()) {
+                std::cerr << "❌ Помилка ініціалізації системи уникнення перешкод" << std::endl;
+                return false;
+            }
             navigator_ = std::make_shared<DeadReckoningNavigator>();
-            local_map_ = std::make_shared<LocalEnvironmentMap>();
-
-            // Встановлення початкової позиції
-            Position3D initial_pos(0, 0, 0);
-            if (!navigator_->Initialize(initial_pos)) {
+            if (!navigator_->Initialize(Position3D(0, 0, 0))) {
                 std::cerr << "❌ Помилка ініціалізації навігатора" << std::endl;
+                return false;
+            }
+            local_map_ = std::make_shared<LocalEnvironmentMap>();
+            if (!local_map_->Initialize()) {
+                std::cerr << "❌ Помилка ініціалізації локальної карти" << std::endl;
                 return false;
             }
 
             mission_state_ = MissionState::IDLE;
+            current_waypoint_index_ = 0;
+            planned_waypoints_.clear();
 
             std::cout << "✅ Автономний агент дрона " << my_id_ << " ініціалізований" << std::endl;
             return true;
@@ -44,41 +71,101 @@ namespace SwarmSystem {
         }
     }
 
+    bool AutonomousDroneAgent::Start() {
+        if (mission_state_ != MissionState::IDLE) {
+            std::cout << "⚠️ Агент вже запущений" << std::endl;
+            return true;
+        }
+
+        mission_state_ = MissionState::SELF_SUFFICIENT;
+
+        // Запуск основного циклу автономного поведения
+        autonomy_thread_ = std::make_unique<std::thread>(&AutonomousDroneAgent::AutonomyLoop, this);
+
+        std::cout << "🚀 Автономний агент дрона " << my_id_ << " запущений" << std::endl;
+        return true;
+    }
+
+    void AutonomousDroneAgent::Stop() {
+        if (mission_state_ == MissionState::IDLE) {
+            return;
+        }
+
+        mission_state_ = MissionState::IDLE;
+
+        if (autonomy_thread_ && autonomy_thread_->joinable()) {
+            autonomy_thread_->join();
+        }
+
+        std::cout << "⏹️ Автономний агент дрона " << my_id_ << " зупинений" << std::endl;
+    }
+
     bool AutonomousDroneAgent::ProcessDistributedCommand(const DistributedCommand& command) {
         std::cout << "📋 Обробка розподіленої команди типу " << command.command_type
                   << " від дрона " << command.originator_id << std::endl;
 
+        if (!ValidateCommand(command)) {
+            std::cout << "❌ Команда не пройшла валідацію" << std::endl;
+            return false;
+        }
+
         // Зберігаємо команду як поточну місію
         current_mission_ = command;
+        mission_state_ = MissionState::EXECUTING_COMMAND;
 
         // Плануємо виконання залежно від типу команди
+        bool success = false;
         switch (command.command_type) {
             case DistributedCommand::MOVE_TO_WAYPOINT:
-                return PlanWaypointMission(command.target_position);
+                success = PlanWaypointMission(command.target_position);
+                break;
 
             case DistributedCommand::SEARCH_PATTERN:
-                return PlanSearchMission(command.area_center, command.search_pattern_width,
-                                         command.search_pattern_height);
+                success = PlanSearchMission(command.area_center, command.search_pattern_width,
+                                            command.search_pattern_height);
+                break;
 
             case DistributedCommand::LOITER_AREA:
-                return PlanLoiterMission(command.area_center, command.area_radius);
+                success = PlanLoiterMission(command.area_center, command.area_radius);
+                break;
 
             case DistributedCommand::ATTACK_TARGET:
-                return PlanAttackMission(command.target_position);
+                success = PlanAttackMission(command.target_position);
+                break;
 
             case DistributedCommand::CHANGE_FORMATION:
-                return PlanFormationChange(command.formation_type);
+                success = PlanFormationChange(command.formation_type);
+                break;
 
             case DistributedCommand::EMERGENCY_STOP:
-                return InitiateEmergencyStop();
+                success = InitiateEmergencyStop();
+                break;
 
             case DistributedCommand::AUTONOMOUS_MODE:
-                return EnableFullAutonomy();
+                success = EnableFullAutonomy();
+                break;
+
+            case DistributedCommand::RETURN_TO_BASE:
+                success = PlanReturnToBase(command.target_position);
+                break;
+
+            case DistributedCommand::ORBIT_TARGET:
+                success = PlanOrbitMission(command.target_position, command.area_radius);
+                break;
 
             default:
                 std::cout << "⚠️ Невідомий тип команди: " << command.command_type << std::endl;
-                return false;
+                success = false;
+                break;
         }
+        if (success) {
+            LogMissionStart(command);
+            BroadcastStatusUpdate();
+        } else {
+            mission_state_ = MissionState::IDLE;
+        }
+
+        return success;
     }
 
     bool AutonomousDroneAgent::ExecuteCurrentMission() {
@@ -89,24 +176,51 @@ namespace SwarmSystem {
         // Оновлюємо стан навігації та карти
         UpdateNavigationState();
 
+        // Перевіряємо аварійні ситуації
+        if (!CheckSafetyConditions()) {
+            return HandleEmergencyCondition();
+        }
+
         // Виконуємо поточну місію
+        bool mission_result = false;
         switch (current_mission_.command_type) {
             case DistributedCommand::MOVE_TO_WAYPOINT:
-                return ExecuteWaypointMission();
+                mission_result = ExecuteWaypointMission();
+                break;
 
             case DistributedCommand::SEARCH_PATTERN:
-                return ExecuteSearchMission();
+                mission_result = ExecuteSearchMission();
+                break;
 
             case DistributedCommand::LOITER_AREA:
-                return ExecuteLoiterMission();
+                mission_result = ExecuteLoiterMission();
+                break;
 
             case DistributedCommand::ATTACK_TARGET:
-                return ExecuteAttackMission();
+                mission_result = ExecuteAttackMission();
+                break;
+
+            case DistributedCommand::ORBIT_TARGET:
+                mission_result = ExecuteOrbitMission();
+                break;
+
+            case DistributedCommand::RETURN_TO_BASE:
+                mission_result = ExecuteReturnToBaseMission();
+                break;
 
             default:
-                return ExecuteDefaultBehavior();
+                mission_result = ExecuteDefaultBehavior();
+                break;
         }
+
+        // Если миссия завершена, переходим в автономное патрулирование
+        if (!mission_result && mission_state_ != MissionState::EMERGENCY) {
+            return InitiateAutonomousPatrol();
+        }
+
+        return mission_result;
     }
+
 
     bool AutonomousDroneAgent::PlanTrajectoryToTarget(const Position3D& target) {
         if (!navigator_) {
@@ -220,28 +334,33 @@ namespace SwarmSystem {
 // Приватні методи реалізації
 
     bool AutonomousDroneAgent::PlanWaypointMission(const Position3D& target) {
-        std::cout << "📍 Планування місії до точки (" << target.x() << ", " << target.y() << ", " << target.z() << ")" << std::endl;
+        std::cout << "🎯 Планування маршруту до точки (" << target.x() << ", " << target.y()
+                  << ", " << target.z() << ")" << std::endl;
 
-        if (!PlanTrajectoryToTarget(target)) {
+        if (!ValidateTargetPosition(target)) {
             return false;
         }
 
-        mission_state_ = MissionState::EXECUTING_COMMAND;
-        return true;
+        return PlanTrajectoryToTarget(target);
     }
 
     bool AutonomousDroneAgent::PlanSearchMission(const Position3D& center, double width, double height) {
-        std::cout << "🔍 Планування пошукової місії в зоні " << width << "x" << height << " навколо ("
-                  << center.x() << ", " << center.y() << ")" << std::endl;
+        std::cout << "🔍 Планування пошуку в зоні (" << center.x() << ", " << center.y()
+                  << ") розмір " << width << "x" << height << "м" << std::endl;
 
-        // Створюємо зигзагоподібний пошуковий патерн
+        if (width <= 0 || height <= 0 || width > 5000 || height > 5000) {
+            std::cout << "❌ Некоректні розміри зони пошуку" << std::endl;
+            return false;
+        }
+
+        // Створення паттерну для пошуку (змійка)
         planned_waypoints_.clear();
 
-        int strips = static_cast<int>(width / 50.0); // Смуги по 50 метрів
-        double strip_width = width / strips;
+        double search_step = 50.0; // 50м між лініями пошуку
+        int num_lines = static_cast<int>(width / search_step) + 1;
 
-        for (int i = 0; i < strips; ++i) {
-            double x_offset = -width/2 + i * strip_width;
+        for (int i = 0; i < num_lines; ++i) {
+            double x_offset = -width/2 + i * search_step;
 
             if (i % 2 == 0) {
                 // Прямий прохід
@@ -265,10 +384,17 @@ namespace SwarmSystem {
         std::cout << "🔄 Планування патрулювання навколо (" << center.x() << ", " << center.y()
                   << ") радіус " << radius << "м" << std::endl;
 
+        if (radius <= 0 || radius > 2000) {
+            std::cout << "❌ Некоректний радіус патрулювання: " << radius << std::endl;
+            return false;
+        }
+
         // Створюємо кругову траєкторію
         planned_waypoints_.clear();
 
-        int points = 16; // 16 точок по колу
+        int points = std::max(8, static_cast<int>(radius / 25)); // Мінімум 8 точок
+        points = std::min(points, 32); // Максимум 32 точки
+
         for (int i = 0; i < points; ++i) {
             double angle = (2.0 * SwarmConstants::PI * i) / points;
             double x = center.x() + radius * cos(angle);
@@ -284,20 +410,37 @@ namespace SwarmSystem {
     }
 
     bool AutonomousDroneAgent::PlanAttackMission(const Position3D& target) {
-        std::cout << "⚔️ Планування атаки на ціль (" << target.x() << ", " << target.y() << ", " << target.z() << ")" << std::endl;
+        std::cout << "⚔️ Планування атаки на ціль (" << target.x() << ", " << target.y()
+                  << ", " << target.z() << ")" << std::endl;
 
-        // Атака можлива тільки з підтвердженням оператора
-        // В автономному режимі переходимо в патрулювання навколо цілі
-        return PlanLoiterMission(target, 100.0); // 100м навколо цілі
+        // В автономному режимі атака обмежена - переходимо в патрулювання навколо цілі
+        // Реальна атака потребує підтвердження від оператора
+        std::cout << "⚠️ Автономна атака заборонена - патрулювання навколо цілі" << std::endl;
+        return PlanOrbitMission(target, 100.0); // 100м навколо цілі
     }
 
     bool AutonomousDroneAgent::PlanFormationChange(FormationType new_formation) {
         std::cout << "📐 Зміна формації на " << SwarmUtils::FormationTypeToString(new_formation) << std::endl;
 
-        // Тут має бути інтеграція з DynamicFormationManager
-        // Поки що просто змінюємо стан
-        mission_state_ = MissionState::EXECUTING_COMMAND;
-        return true;
+        // Отримання інформації про сусідів
+        auto nearby_drones = GetNearbyDrones();
+        if (nearby_drones.empty()) {
+            std::cout << "⚠️ Немає сусідніх дронів для формації" << std::endl;
+            return false;
+        }
+
+        // Розрахунок позиції в новій формації
+        Position3D formation_position = CalculateFormationPosition(new_formation, nearby_drones);
+
+        // Планування руху до нової позиції в формації
+        bool success = PlanWaypointMission(formation_position);
+
+        if (success) {
+            current_formation_ = new_formation;
+            BroadcastFormationChange(new_formation);
+        }
+
+        return success;
     }
 
     bool AutonomousDroneAgent::InitiateEmergencyStop() {
