@@ -225,6 +225,84 @@ void PrintHelp() {
 )" << std::endl;
 }
 
+void processDistributedCommands() {
+    // ✅ РЕАЛЬНАЯ обработка распределенных команд
+    if (mesh_protocol && mesh_protocol->HasPendingCommands()) {
+        auto commands = mesh_protocol->GetPendingCommands();
+
+        for (const auto& command : commands) {
+            if (autonomous_agent) {
+                bool success = autonomous_agent->ProcessDistributedCommand(command);
+
+                if (success) {
+                    std::cout << "✅ Распределенная команда выполнена: тип "
+                              << command.command_type << " от дрона " << command.originator_id << std::endl;
+                } else {
+                    std::cout << "❌ Ошибка выполнения команды от дрона " << command.originator_id << std::endl;
+                }
+            }
+        }
+
+        // Очищаем обработанные команды
+        mesh_protocol->ClearProcessedCommands();
+    }
+
+    // Проверяем команды от ground station через LoRa
+    if (comm_manager && comm_manager->has_incoming_messages()) {
+        // Обрабатываем команды от наземной станции
+        processGroundStationCommands();
+    }
+}
+
+void processGroundStationCommands() {
+    // ✅ РЕАЛЬНАЯ обработка команд от ground station
+    while (comm_manager->has_incoming_messages()) {
+        SwarmControl::SwarmMessage message;
+        if (comm_manager->get_next_message(message)) {
+
+            switch (message.type) {
+                case SwarmControl::MessageType::COMMAND:
+                    handleGroundStationCommand(message);
+                    break;
+
+                case SwarmControl::MessageType::FORMATION_UPDATE:
+                    handleFormationUpdate(message);
+                    break;
+
+                case SwarmControl::MessageType::MISSION_UPDATE:
+                    handleMissionUpdate(message);
+                    break;
+
+                case SwarmControl::MessageType::EMERGENCY:
+                    handleEmergencyCommand(message);
+                    break;
+
+                default:
+                    // Передаем другие сообщения mesh протоколу
+                    if (mesh_protocol) {
+                        mesh_protocol->ProcessExternalMessage(message);
+                    }
+                    break;
+            }
+        }
+    }
+}
+
+void handleGroundStationCommand(const SwarmControl::SwarmMessage& message) {
+    // Декодируем команду из payload
+    if (message.payload.size() >= sizeof(DistributedCommand)) {
+        DistributedCommand command;
+        std::memcpy(&command, message.payload.data(), sizeof(DistributedCommand));
+
+        // Выполняем команду
+        if (autonomous_agent) {
+            autonomous_agent->ProcessDistributedCommand(command);
+        }
+
+        std::cout << "📡 Команда от ground station выполнена" << std::endl;
+    }
+}
+
 int main(int argc, char* argv[]) {
     // Перевірка аргументів
     if (argc < 2) {

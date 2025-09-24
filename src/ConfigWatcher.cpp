@@ -83,32 +83,57 @@ namespace SwarmSystem {
         return "lora";
     }
 
-    bool LoRaConfigHandler::updateFrequencyList(const std::string& freq_list,
+    bool LoRaConfigHandler::updateFrequencyList(const std::string& frequency_string,
                                                 std::shared_ptr<SwarmControl::CommunicationManager> comm_mgr) {
-        // Parse comma-separated frequency list
-        std::vector<uint32_t> frequencies;
-        std::stringstream ss(freq_list);
-        std::string freq_str;
+        try {
+            std::vector<uint32_t> frequencies;
+            std::stringstream ss(frequency_string);
+            std::string freq_str;
 
-        while (std::getline(ss, freq_str, ',')) {
-            try {
+            // Парсинг частот из строки (разделенных запятыми)
+            while (std::getline(ss, freq_str, ',')) {
                 // Убираем пробелы
                 freq_str.erase(std::remove_if(freq_str.begin(), freq_str.end(), ::isspace), freq_str.end());
-                uint32_t freq = std::stoul(freq_str);
-                frequencies.push_back(freq);
-            } catch (const std::exception& e) {
-                std::cerr << "❌ Неверная частота: " << freq_str << std::endl;
+
+                if (!freq_str.empty()) {
+                    uint32_t frequency = std::stoul(freq_str);
+
+                    // Валидация частоты
+                    if (frequency >= 433000000 && frequency <= 2500000000) {
+                        frequencies.push_back(frequency);
+                    } else {
+                        std::cerr << "❌ Недопустимая частота: " << frequency << " Hz" << std::endl;
+                        return false;
+                    }
+                }
+            }
+
+            if (frequencies.empty()) {
+                std::cerr << "❌ Пустой список частот" << std::endl;
                 return false;
             }
-        }
 
-        if (frequencies.empty()) {
-            std::cerr << "❌ Пустой список частот!" << std::endl;
+            // ✅ РЕАЛЬНОЕ обновление частот в CommunicationManager
+            bool success = comm_mgr->update_frequency_list(frequencies);
+
+            if (success) {
+                std::cout << "✅ Обновлен список частот LoRa: " << frequencies.size()
+                          << " частот" << std::endl;
+
+                // Вывод всех частот для подтверждения
+                for (size_t i = 0; i < frequencies.size(); i++) {
+                    double freq_mhz = frequencies[i] / 1000000.0;
+                    std::cout << "  Частота " << (i+1) << ": "
+                              << std::fixed << std::setprecision(3) << freq_mhz << " MHz" << std::endl;
+                }
+            }
+
+            return success;
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Ошибка парсинга частот: " << e.what() << std::endl;
             return false;
         }
-
-        // TODO: Добавить метод в CommunicationManager
-        return comm_mgr->update_frequency_list(frequencies);
     }
 
 // UWBConfigHandler implementation
@@ -155,6 +180,35 @@ namespace SwarmSystem {
             : crypto_manager_(crypto_mgr) {
     }
 
+    bool SecurityConfigHandler::updateSharedSecret(const std::string& new_secret) {
+        if (new_secret.length() < 32) {
+            std::cerr << "❌ Общий секрет слишком короткий (минимум 32 символа)" << std::endl;
+            return false;
+        }
+
+        try {
+            if (auto crypto_mgr = crypto_manager_.lock()) {
+                // Обновляем общий секрет
+                bool success = crypto_mgr->UpdateSharedSecret(new_secret);
+
+                if (success) {
+                    std::cout << "🔐 Общий секрет успешно обновлен" << std::endl;
+                } else {
+                    std::cerr << "❌ Не удалось обновить общий секрет" << std::endl;
+                }
+
+                return success;
+            } else {
+                std::cerr << "❌ CryptoManager недоступен" << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Ошибка обновления секрета: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
     bool SecurityConfigHandler::CanHandleHotReload(const std::string& key) const {
         // Безопасность - только некритические изменения
         return false; // Все изменения безопасности критичны!
@@ -178,9 +232,32 @@ namespace SwarmSystem {
     }
 
     bool SecurityConfigHandler::updateLogLevel(const std::string& level) {
-        // TODO: Реализовать изменение уровня логирования
-        std::cout << "🔒 Уровень логирования безопасности: " << level << std::endl;
-        return true;
+        try {
+            // Валидация уровня логирования
+            std::vector<std::string> valid_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"};
+
+            auto it = std::find(valid_levels.begin(), valid_levels.end(), level);
+            if (it == valid_levels.end()) {
+                std::cerr << "❌ Недопустимый уровень логирования: " << level << std::endl;
+                return false;
+            }
+
+            // ✅ РЕАЛЬНОЕ обновление уровня логирования
+            if (auto crypto_mgr = crypto_manager_.lock()) {
+                // Устанавливаем уровень логирования безопасности
+                crypto_mgr->SetSecurityLogLevel(level);
+
+                std::cout << "🔒 Уровень логирования безопасности установлен: " << level << std::endl;
+                return true;
+            } else {
+                std::cerr << "❌ CryptoManager недоступен для установки уровня логирования" << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Ошибка установки уровня логирования: " << e.what() << std::endl;
+            return false;
+        }
     }
 
 // ConfigWatcher implementation

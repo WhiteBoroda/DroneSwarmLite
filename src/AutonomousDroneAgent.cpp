@@ -603,4 +603,33 @@ namespace SwarmSystem {
         return true;
     }
 
+    void AutonomousDroneAgent::SimulateMovement(const Position3D& target, const Velocity3D& velocity) {
+        // ✅ РЕАЛЬНАЯ симуляция движения (когда нет flight controller)
+        static Position3D simulated_position = current_state_.position;
+
+        // Рассчитываем направление к цели
+        Position3D direction = target - simulated_position;
+        double distance = direction.magnitude();
+
+        if (distance > 0.1) { // Если еще не достигли цели
+            // Нормализуем направление
+            direction = direction.normalized();
+
+            // Двигаемся со скоростью velocity
+            double dt = 0.05; // 50ms update
+            Position3D movement = direction * velocity.magnitude() * dt;
+
+            simulated_position = simulated_position + movement;
+
+            // Обновляем позицию навигатора
+            if (navigator_) {
+                navigator_->SetPosition(simulated_position.x(), simulated_position.y(), simulated_position.z());
+            }
+
+            std::cout << "🎮 [SIM] Позиция: (" << std::fixed << std::setprecision(2)
+                      << simulated_position.x() << ", " << simulated_position.y()
+                      << ", " << simulated_position.z() << ") дистанция до цели: " << distance << "м" << std::endl;
+        }
+    }
+
 } // namespace SwarmSystem
