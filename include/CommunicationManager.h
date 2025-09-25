@@ -1,13 +1,21 @@
+//
+// CommunicationManager.h - Complete header with encryption support
+//
+
 #pragma once
 
 #include "SwarmTypes.h"
+#include "CryptoManager.h"
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <condition_variable>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
+#include <chrono>
+#include <memory>
 
 namespace SwarmControl {
 
@@ -38,19 +46,66 @@ namespace SwarmControl {
         EMERGENCY_BROADCAST
     };
 
+// Communication status
+    enum class CommunicationStatus : uint8_t {
+        EXCELLENT = 0,
+        GOOD = 1,
+        POOR = 2,
+        CRITICAL = 3,
+        LOST = 4
+    };
+
 // Message structure
     struct SwarmMessage {
         MessageType type;
-        DroneId source_id;
-        DroneId destination_id; // 0xFFFF for broadcast
+        DroneID source_id;
+        DroneID destination_id; // 0xFFFF for broadcast
         uint16_t sequence_number;
         uint32_t timestamp_ms;
         std::vector<uint8_t> payload;
         uint8_t priority; // 0-255, 255 = highest
         uint8_t retry_count;
+        bool encrypted; // Encryption flag
 
         SwarmMessage() : type(MessageType::HEARTBEAT), source_id(0), destination_id(0xFFFF),
-                         sequence_number(0), timestamp_ms(0), priority(128), retry_count(0) {}
+                         sequence_number(0), timestamp_ms(0), priority(128), retry_count(0), encrypted(false) {}
+    };
+
+// LoRa message structure for hardware communication
+    struct LoRaMessage {
+        uint32_t magic;           // 0xDEADBEEF - protocol signature
+        uint8_t version;          // Protocol version
+        uint8_t message_type;     // Message type
+        DroneID sender_id;        // Sender ID
+        DroneID target_id;        // Target ID (0 = broadcast)
+        uint16_t sequence;        // Sequence number
+        uint16_t payload_size;    // Payload size
+        uint32_t checksum;        // CRC32 checksum
+        uint8_t payload[512];     // Payload data
+
+        LoRaMessage() {
+            magic = 0xDEADBEEF;
+            version = 1;
+            message_type = 0;
+            sender_id = 0;
+            target_id = 0;
+            sequence = 0;
+            payload_size = 0;
+            checksum = 0;
+            memset(payload, 0, sizeof(payload));
+        }
+    };
+
+// LoRa configuration
+    struct LoRaConfig {
+        uint32_t frequency;
+        int8_t power;
+        uint32_t bandwidth;
+        uint8_t spreading_factor;
+        uint8_t coding_rate;
+
+        LoRaConfig() : frequency(868100000), power(10), bandwidth(125000),
+                       spreading_factor(9), coding_rate(8) {}
     };
 
 // Communication statistics
@@ -62,12 +117,30 @@ namespace SwarmControl {
         double average_rssi;
         double packet_loss_rate;
         uint32_t frequency_hops;
-        Timestamp last_successful_transmission;
+        std::chrono::steady_clock::time_point last_successful_transmission;
+    };
+
+// Mesh neighbor info
+    struct MeshNeighbor {
+        DroneID drone_id;
+        int8_t rssi;
+        double packet_loss;
+        uint32_t last_seen;
+        bool is_reliable;
+    };
+
+// Mesh route info
+    struct MeshRoute {
+        DroneID destination;
+        DroneID next_hop;
+        uint8_t hop_count;
+        double quality;
+        uint32_t timestamp;
     };
 
     class CommunicationManager {
     public:
-        explicit CommunicationManager(DroneId drone_id, const std::string& config_path);
+        explicit CommunicationManager(DroneID drone_id, const std::string& config_path);
         ~CommunicationManager();
 
         // Core lifecycle
@@ -93,8 +166,8 @@ namespace SwarmControl {
         // Mesh networking
         bool join_mesh_network();
         bool leave_mesh_network();
-        bool establish_mesh_route(DroneId destination);
-        std::vector<DroneId> get_mesh_neighbors() const;
+        bool establish_mesh_route(DroneID destination);
+        std::vector<DroneID> get_mesh_neighbors() const;
         bool forward_mesh_message(const SwarmMessage& message);
 
         // Ground station communication
@@ -123,63 +196,34 @@ namespace SwarmControl {
         size_t get_incoming_queue_size() const;
         bool clear_message_queues();
 
-        // Synchronization and timing
-        bool synchronize_network_time();
-        uint32_t get_network_timestamp() const;
-        bool set_time_reference(uint32_t reference_time);
+        // Statistics
+        CommStats get_communication_stats() const;
+        void reset_statistics();
 
-        // Error handling and recovery
-        bool handle_transmission_failure(const SwarmMessage& message);
-        bool attempt_message_recovery();
-        bool reset_communication_hardware();
+        //=============================================================================
+        // NEW METHODS ADDED FROM IMPLEMENTATION
+        //=============================================================================
 
-        // Statistics and diagnostics
-        CommStats get_communication_statistics() const;
-        bool run_communication_diagnostics();
-        bool test_link_quality(DroneId target_drone);
-
-        // Configuration management
-        bool reload_communication_config();
-        bool update_lora_config(const LoRaConfig& config);
-        bool update_power_limits(uint8_t max_power_dbm);
-
-        // Hardware interface methods
-        bool initialize_lora_radio();
-        bool initialize_elrs_modules();
-        bool configure_antennas();
-        bool check_hardware_status();
-
-        // Power management - hot reload support
-        bool set_max_power_level(int8_t max_power_dbm);
-        bool set_min_power_level(int8_t min_power_dbm);
-        bool set_current_power_level(int8_t power_dbm);
-        int8_t get_max_power_level() const;
-        int8_t get_min_power_level() const;
-        int8_t get_current_power_level() const;
-
-        // Frequency management - hot reload support
+        // Frequency management
         bool update_frequency_list(const std::vector<uint32_t>& new_frequencies);
         bool add_frequency(uint32_t frequency);
         bool remove_frequency(uint32_t frequency);
-        std::vector<uint32_t> get_frequency_list() const;
-        bool set_primary_frequency(uint32_t frequency);
-        uint32_t get_current_frequency() const;
-
-// Frequency hopping control - hot reload support
+        bool change_frequency(uint32_t new_frequency);
+        uint32_t select_best_frequency();
         bool enable_frequency_hopping(bool enable);
         bool set_frequency_hop_interval(uint32_t interval_ms);
         bool set_interference_threshold(double threshold_dbm);
-        bool is_frequency_hopping_enabled() const;
-        uint32_t get_frequency_hop_interval() const;
 
-// Mesh networking control - hot reload support
-        bool enable_mesh_networking(bool enable);
-        bool set_mesh_max_hops(uint8_t max_hops);
-        bool set_mesh_discovery_interval(uint32_t interval_ms);
-        bool is_mesh_enabled() const;
-        uint8_t get_mesh_max_hops() const;
+        // Power management  
+        bool set_power_level(int8_t power_dbm);
+        bool set_min_power_level(int8_t min_power);
+        bool set_max_power_level(int8_t max_power);
+        bool enable_adaptive_power_control(bool enable);
+        bool set_adaptive_power_step(int8_t step_dbm);
+        bool set_rssi_threshold(double threshold_dbm);
+        bool is_adaptive_power_enabled() const;
 
-// Communication timeouts - hot reload support
+        // Communication timeouts
         bool set_communication_timeout(uint32_t timeout_ms);
         bool set_heartbeat_interval(uint32_t interval_ms);
         bool set_max_retries(uint8_t max_retries);
@@ -187,158 +231,162 @@ namespace SwarmControl {
         uint32_t get_heartbeat_interval() const;
         uint8_t get_max_retries() const;
 
-// Adaptive power control - hot reload support
-        bool enable_adaptive_power_control(bool enable);
-        bool set_adaptive_power_step(int8_t step_dbm);
-        bool set_rssi_threshold(double threshold_dbm);
-        bool is_adaptive_power_enabled() const;
+        // Mesh networking configuration
+        bool enable_mesh_networking(bool enable);
+        bool set_mesh_max_hops(uint8_t max_hops);
+        bool set_mesh_discovery_interval(uint32_t interval_ms);
+        bool is_mesh_enabled() const;
+        uint8_t get_mesh_max_hops() const;
+
+        // Anti-jamming and interference
+        bool detect_interference();
+        void broadcast_frequency_change(uint32_t new_frequency);
+
+        //=============================================================================
+        // ENCRYPTION METHODS (ADDED)
+        //=============================================================================
+
+        // Encryption setup
+        bool initialize_encryption(std::shared_ptr<CryptoManager> crypto_manager);
+        bool set_encryption_key(const std::vector<uint8_t>& key);
+        bool enable_message_encryption(bool enable);
+        bool is_encryption_enabled() const;
+
+        // Message encryption/decryption
+        bool encrypt_message(SwarmMessage& message);
+        bool decrypt_message(SwarmMessage& message);
+        bool encrypt_payload(std::vector<uint8_t>& payload, const std::vector<uint8_t>& key);
+        bool decrypt_payload(std::vector<uint8_t>& payload, const std::vector<uint8_t>& key);
+
+        // Key management
+        bool rotate_encryption_key();
+        bool distribute_key_to_swarm(const std::vector<uint8_t>& new_key);
+        bool handle_key_rotation_request(const SwarmMessage& message);
+        std::vector<uint8_t> generate_session_key();
+
+        // Message authentication
+        bool add_message_authentication(SwarmMessage& message);
+        bool verify_message_authentication(const SwarmMessage& message);
+        std::vector<uint8_t> calculate_message_hmac(const SwarmMessage& message, const std::vector<uint8_t>& key);
 
     private:
-        // Core identification
-        DroneId drone_id_;
+        // Core member variables
+        DroneID drone_id_;
         std::string config_path_;
-
-        // Hardware interfaces
-        class LoRaRadio;
-        class ELRSModule;
-
-        std::unique_ptr<LoRaRadio> lora_radio_;
-        std::unique_ptr<ELRSModule> elrs_2_4ghz_;
-        std::unique_ptr<ELRSModule> elrs_915mhz_;
-
-        // Threading
-        std::thread tx_thread_;
-        std::thread rx_thread_;
-        std::thread mesh_maintenance_thread_;
-        std::thread adaptive_comm_thread_;
         std::atomic<bool> running_;
-
-        // Message queues
-        std::queue<SwarmMessage> outgoing_queue_;
-        std::queue<SwarmMessage> incoming_queue_;
-        std::queue<SwarmMessage> priority_queue_;
-        mutable std::mutex outgoing_mutex_;
-        mutable std::mutex incoming_mutex_;
-        mutable std::mutex priority_mutex_;
-
-
-        std::condition_variable tx_cv_;
-        std::condition_variable rx_cv_;
-
-        // Message handling
-        std::unordered_map<MessageType, MessageCallback> message_handlers_;
-        mutable std::mutex handlers_mutex_;
-
-        // Sequence tracking
         uint16_t next_sequence_number_;
-        std::unordered_map<DroneId, uint16_t> last_received_sequence_;
-        mutable std::mutex sequence_mutex_;
 
-        // Mesh networking
-        struct MeshNode {
-            DroneId node_id;
-            int8_t signal_strength;
-            uint8_t hop_count;
-            Timestamp last_seen;
-            bool is_reachable;
-        };
-
-        std::unordered_map<DroneId, MeshNode> mesh_neighbors_;
-        std::unordered_map<DroneId, std::vector<DroneId>> mesh_routes_;
-        mutable std::mutex mesh_mutex_;
-        mutable std::mutex freq_mutex_;
-
-        // Communication parameters
-        LoRaConfig current_lora_config_;
+        // LoRa hardware state
         uint32_t current_frequency_;
-        uint8_t current_power_level_;
-        std::vector<uint32_t> frequency_list_;
+        int8_t current_power_level_;
         size_t frequency_index_;
+        LoRaConfig current_lora_config_;
 
-        // Ground station connection
+        // Communication state
         std::atomic<bool> ground_station_connected_;
-        Timestamp last_ground_contact_;
-
-        // Signal quality monitoring
         std::atomic<int8_t> current_rssi_;
         std::atomic<double> packet_loss_rate_;
         std::atomic<double> link_quality_;
+        int32_t network_time_offset_;
+
+        // Configuration variables (loaded from config file)
+        uint32_t communication_timeout_;
+        uint32_t heartbeat_interval_;
+        uint8_t max_retries_;
+        bool adaptive_power_enabled_;
+        int8_t adaptive_power_step_;
+        double rssi_threshold_;
+        bool frequency_hopping_enabled_;
+        uint32_t frequency_hop_interval_;
+        double interference_threshold_;
+        bool mesh_enabled_;
+        uint8_t mesh_max_hops_;
+        uint32_t mesh_discovery_interval_;
+        int8_t min_power_level_;
+        int8_t max_power_level_;
+
+        // Frequency management
+        std::vector<uint32_t> frequency_list_;
+        std::mutex freq_mutex_;
+        std::chrono::steady_clock::time_point last_frequency_hop_;
+
+        // Adaptive power control
+        std::chrono::steady_clock::time_point last_adaptive_update_;
+
+        // Mesh networking
+        std::unordered_map<DroneID, MeshNeighbor> mesh_neighbors_;
+        std::unordered_map<DroneID, MeshRoute> mesh_routes_;
+        std::mutex mesh_mutex_;
+        std::chrono::steady_clock::time_point last_mesh_discovery_;
+
+        // Message queues and threading
+        std::queue<SwarmMessage> outgoing_queue_;
+        std::queue<SwarmMessage> priority_queue_;
+        std::vector<SwarmMessage> incoming_queue_;
+        std::mutex queue_mutex_;
+        std::condition_variable queue_condition_;
+
+        // Communication threads
+        std::unique_ptr<std::thread> tx_thread_;
+        std::unique_ptr<std::thread> rx_thread_;
+        std::unique_ptr<std::thread> mesh_thread_;
+        std::unique_ptr<std::thread> adaptive_thread_;
 
         // Statistics
         CommStats communication_stats_;
-        mutable std::mutex stats_mutex_;
 
-        // Timing and synchronization
-        uint32_t network_time_offset_;
-        Timestamp last_time_sync_;
-        mutable std::mutex time_sync_mutex_;
+        // Message handling
+        std::unordered_map<MessageType, MessageCallback> message_handlers_;
+        std::unordered_set<uint16_t> seen_sequences_;
 
-        // Private methods - Threading
+        //=============================================================================
+        // ENCRYPTION MEMBER VARIABLES (ADDED)
+        //=============================================================================
+
+        // Encryption state
+        std::shared_ptr<CryptoManager> crypto_manager_;
+        bool encryption_enabled_;
+        std::vector<uint8_t> current_encryption_key_;
+        std::vector<uint8_t> hmac_key_;
+        uint32_t key_rotation_counter_;
+        std::chrono::steady_clock::time_point last_key_rotation_;
+        std::mutex encryption_mutex_;
+
+        // Session keys for different drones
+        std::unordered_map<DroneID, std::vector<uint8_t>> drone_session_keys_;
+
+        //=============================================================================
+        // PRIVATE METHODS
+        //=============================================================================
+
+        // Configuration loading
+        bool load_communication_config();
+
+        // Hardware abstraction layer
+        bool initialize_lora_radio();
+        bool initialize_elrs_modules();
+        bool set_lora_frequency(uint32_t frequency);
+        bool set_lora_power(int8_t power_dbm);
+        bool write_lora_register(uint8_t reg, uint8_t value);
+        bool read_lora_register(uint8_t reg, uint8_t* value);
+
+        // Message processing
+        bool validate_message(const SwarmMessage& message) const;
+        bool transmit_lora_message(const LoRaMessage* message);
+        bool receive_lora_message(LoRaMessage* message);
+        uint32_t calculate_checksum(const LoRaMessage* message);
+        double test_frequency_quality(uint32_t frequency);
+        double measure_noise_floor();
+
+        // Threading loops
         void transmission_loop();
         void reception_loop();
         void mesh_maintenance_loop();
         void adaptive_communication_loop();
 
-        // Message processing
-        bool process_outgoing_message(const SwarmMessage& message);
-        bool process_incoming_message(const SwarmMessage& message);
-        bool validate_message(const SwarmMessage& message) const;
-        bool decrypt_message(SwarmMessage& message);
-        bool encrypt_message(SwarmMessage& message);
-
-        // Protocol implementation
-        bool transmit_lora_message(const SwarmMessage& message);
-        bool transmit_elrs_message(const SwarmMessage& message, CommProtocol protocol);
-        bool receive_lora_message(SwarmMessage& message);
-        bool receive_elrs_message(SwarmMessage& message);
-
-        // Mesh networking helpers
-        bool discover_mesh_neighbors();
-        bool update_mesh_topology();
-        bool find_best_route(DroneId destination, std::vector<DroneId>& route);
-        bool clean_stale_mesh_entries();
-
-        // Adaptive communication helpers
-        bool measure_channel_quality();
-        bool detect_interference();
-        bool adjust_transmission_parameters();
-        bool select_alternative_protocol();
-
-        // Error handling
-        bool handle_checksum_error(const SwarmMessage& message);
-        bool handle_timeout_error(const SwarmMessage& message);
-        bool handle_hardware_error();
-        bool attempt_automatic_recovery();
-
-        // Utility methods
-        uint16_t calculate_checksum(const SwarmMessage& message) const;
-        bool is_message_duplicate(const SwarmMessage& message) const;
-        uint8_t calculate_signal_strength(int8_t rssi) const;
-        bool should_forward_message(const SwarmMessage& message) const;
-
-        // Configuration helpers
-        bool load_communication_config();
-        bool parse_frequency_list();
-        bool configure_transmission_power();
-        bool setup_mesh_parameters();
-
-        // Hardware abstraction
-        bool write_to_lora_register(uint8_t address, uint8_t value);
-        uint8_t read_from_lora_register(uint8_t address);
-        bool configure_lora_parameters(const LoRaConfig& config);
-        bool check_lora_status();
-
-        // Logging
+        // Utility
         void log_communication_event(const std::string& event, const std::string& details = "");
-        void log_message_transmission(const SwarmMessage& message, bool success);
-        void log_signal_quality(int8_t rssi, double packet_loss);
+        uint32_t get_current_time_ms() const;
     };
 
-} // namespace SwarmControl//
-// Created by yv on 22.09.2025.
-//
-
-#ifndef DRONESWARMLITE_COMMUNICATIONMANAGER_H
-#define DRONESWARMLITE_COMMUNICATIONMANAGER_H
-
-#endif //DRONESWARMLITE_COMMUNICATIONMANAGER_H
+} // namespace SwarmControl

@@ -1,5 +1,5 @@
-// src/main.cpp - ИСПРАВЛЕН: заменить DistributedSwarmManager на компоненты
-// 🇺🇦 Головний файл системи управління роєм дронів 🇺🇦
+// src/main.cpp - Integration with encryption support
+//
 
 #include <iostream>
 #include <signal.h>
@@ -27,85 +27,102 @@ std::atomic<bool> g_shutdown_requested{false};
 DroneID my_id = 0;
 std::string config_path;
 
-// Основные компоненты системы (вместо DistributedSwarmManager!)
+// Основные компоненты системы
 std::unique_ptr<ConfigManager> config_manager;
+std::unique_ptr<CryptoManager> crypto_manager;
 std::unique_ptr<SwarmControl::CommunicationManager> comm_manager;
 std::unique_ptr<MeshNetwork::SwarmMeshProtocol> mesh_protocol;
 std::unique_ptr<DistributedPositioning::DistributedPositionTracker> position_tracker;
 std::unique_ptr<AutonomousDroneAgent> drone_agent;
 std::unique_ptr<UWBManager> uwb_manager;
-std::unique_ptr<CryptoManager> crypto_manager;
+std::unique_ptr<SwarmSystem::ConfigWatcher> config_watcher;
 
 void SignalHandler(int signal) {
-    std::cout << "\nОтримано сигнал " << signal << ". Ініціація зупинки..." << std::endl;
+    std::cout << "\nReceived signal " << signal << ". Initiating shutdown..." << std::endl;
     g_shutdown_requested = true;
 }
 
 void PrintBanner() {
     std::cout << R"(
 ╔══════════════════════════════════════════════════════════════╗
-║                РОЗПОДІЛЕНА СИСТЕМА УПРАВЛІННЯ РОЄМ           ║
+║                DISTRIBUTED SWARM CONTROL SYSTEM             ║
 ║                         v2.0.0-MESH                         ║
 ║                                                              ║
-║              🇺🇦 SLAVA UKRAINI! HEROIAM SLAVA! 🇺🇦            ║
-║                                                              ║
-║  ⚡ Mesh-мережа      ⚓ Динамічний якір     🤖 Автономія     ║
-║  🔒 Шифрування      🛡️ Живучість          📡 Без GPS       ║
+║          Mesh Network + Dynamic Anchor + Autonomous         ║
+║           Encryption + Survivability + GPS-Free             ║
 ╚══════════════════════════════════════════════════════════════╝
 )" << std::endl;
 }
 
 // Инициализация всех компонентов
 bool InitializeAllSystems() {
-    std::cout << "⚙️ Ініціалізація розподіленої системи..." << std::endl;
+    std::cout << "Initializing distributed system..." << std::endl;
 
     // 1. ConfigManager
     config_manager = std::make_unique<ConfigManager>(config_path);
     if (!config_manager->IsLoaded()) {
-        std::cerr << "❌ Не вдалося завантажити конфігурацію!" << std::endl;
+        std::cerr << "Failed to load configuration!" << std::endl;
         return false;
     }
 
-    // 2. CryptoManager
-    crypto_manager = std::make_unique<CryptoManager>();
-    if (!crypto_manager->Initialize()) {
-        std::cerr << "❌ Помилка ініціалізації криптографії!" << std::endl;
+    // 2. CryptoManager - инициализируем с shared secret из конфига
+    std::string shared_secret = config_manager->GetValue<std::string>("security.shared_secret", "DEFAULT_SWARM_SECRET");
+    crypto_manager = std::make_unique<CryptoManager>(my_id);
+    if (!crypto_manager->Initialize(shared_secret)) {
+        std::cerr << "Failed to initialize cryptography!" << std::endl;
         return false;
     }
 
     // 3. CommunicationManager
     comm_manager = std::make_unique<SwarmControl::CommunicationManager>(my_id, config_path);
     if (!comm_manager->initialize()) {
-        std::cerr << "❌ Помилка ініціалізації зв'язку!" << std::endl;
+        std::cerr << "Failed to initialize communication!" << std::endl;
         return false;
     }
 
-    // 4. UWBManager
+    // 4. INTEGRATION: Connect encryption to communication
+    if (!comm_manager->initialize_encryption(crypto_manager)) {
+        std::cerr << "Failed to initialize communication encryption!" << std::endl;
+        return false;
+    }
+
+    // 5. Enable encryption by default
+    bool encryption_enabled = config_manager->GetValue<bool>("security.enable_encryption", true);
+    if (!comm_manager->enable_message_encryption(encryption_enabled)) {
+        std::cerr << "Failed to enable message encryption!" << std::endl;
+        return false;
+    }
+
+    std::cout << "Encryption status: " << (encryption_enabled ? "ENABLED" : "DISABLED") << std::endl;
+
+    // 6. UWBManager
     uwb_manager = std::make_unique<UWBManager>(my_id);
     if (!uwb_manager->Initialize()) {
-        std::cerr << "❌ Помилка ініціалізації UWB!" << std::endl;
+        std::cerr << "Failed to initialize UWB!" << std::endl;
         return false;
     }
 
-    // 5. MeshProtocol
+    // 7. MeshProtocol
     mesh_protocol = std::make_unique<MeshNetwork::SwarmMeshProtocol>(my_id);
     if (!mesh_protocol->Initialize()) {
-        std::cerr << "❌ Помилка ініціалізації Mesh-мережі!" << std::endl;
+        std::cerr << "Failed to initialize Mesh network!" << std::endl;
         return false;
     }
 
-    // 6. DistributedPositioning
+    // 8. DistributedPositioning
     position_tracker = std::make_unique<DistributedPositioning::DistributedPositionTracker>(
             my_id, mesh_protocol);
 
-    // 7. AutonomousDroneAgent
+    // 9. AutonomousDroneAgent
     drone_agent = std::make_unique<AutonomousDroneAgent>(my_id);
     if (!drone_agent->Initialize(mesh_protocol, position_tracker)) {
-        std::cerr << "❌ Помилка ініціалізації автономного агента!" << std::endl;
+        std::cerr << "Failed to initialize autonomous agent!" << std::endl;
         return false;
     }
 
+    // 10. ConfigWatcher для hot-reload
     config_watcher = std::make_unique<SwarmSystem::ConfigWatcher>(config_manager, config_path);
+
     // LoRa configuration handler
     auto lora_handler = std::make_unique<SwarmSystem::LoRaConfigHandler>(comm_manager);
     config_watcher->registerSectionHandler(std::move(lora_handler));
@@ -121,293 +138,259 @@ bool InitializeAllSystems() {
     // Global callback для изменений не покрытых специальными handlers
     config_watcher->setGlobalChangeCallback([](const std::string& section, const std::string& key,
                                                const std::string& old_val, const std::string& new_val) -> bool {
-        std::cout << "🔄 Глобальное изменение конфигурации: " << section << "." << key
-                  << " изменен с '" << old_val << "' на '" << new_val << "'" << std::endl;
+        std::cout << "Global config change: " << section << "." << key
+                  << " changed from '" << old_val << "' to '" << new_val << "'" << std::endl;
 
         // Handle specific global changes that aren't covered by handlers
         if (section == "communication") {
-            std::cout << "📡 Обновлены параметры связи: " << key << " = " << new_val << std::endl;
+            std::cout << "Communication parameters updated: " << key << " = " << new_val << std::endl;
             return true; // Assume applied successfully
         }
 
         if (section == "system" && key == "max_drones_mvp") {
-            std::cout << "🚨 Изменение количества дронов требует перезапуска системы!" << std::endl;
-            return false; // Cannot apply without restart
+            std::cout << "WARNING: Changing drone count requires system restart!" << std::endl;
+            return false; // Cannot change on-the-fly
         }
 
-        std::cout << "⚠️ Неизвестное изменение конфигурации: " << section << "." << key << std::endl;
+        return true; // Default: accept change
+    });
+
+    // Start ConfigWatcher
+    if (!config_watcher->start()) {
+        std::cerr << "Failed to start configuration watcher!" << std::endl;
         return false;
-    });
+    }
 
-    // System restart callback для критических изменений
-    config_watcher->setSystemRestartCallback([](const std::string& reason) {
-        std::cout << "🚨 ТРЕБУЕТСЯ ПЕРЕЗАПУСК СИСТЕМЫ: " << reason << std::endl;
-        std::cout << "⚠️ Некоторые изменения конфигурации требуют полного перезапуска!" << std::endl;
-        std::cout << "   Нажмите 'r' для перезапуска или продолжите с текущими настройками..." << std::endl;
-        // Можно установить флаг для перезапуска или уведомить оператора
-    });
-
-    std::cout << "✅ ConfigWatcher инициализирован" << std::endl;
-    return true;
-}
-
-    std::cout << "✅ Всі компоненти ініціалізовано!" << std::endl;
+    std::cout << "All systems initialized successfully!" << std::endl;
     return true;
 }
 
 bool StartAllSystems() {
-    std::cout << "🚀 Запуск всіх систем..." << std::endl;
+    std::cout << "Starting all systems..." << std::endl;
 
+    // Start CommunicationManager first (needed by others)
     if (!comm_manager->start()) {
-        std::cerr << "❌ Не вдалося запустити зв'язок!" << std::endl;
+        std::cerr << "Failed to start communication manager!" << std::endl;
         return false;
     }
 
-    if (!uwb_manager->Start()) {
-        std::cerr << "❌ Не вдалося запустити UWB!" << std::endl;
-        return false;
-    }
-
+    // Start MeshProtocol
     if (!mesh_protocol->Start()) {
-        std::cerr << "❌ Не вдалося запустити Mesh!" << std::endl;
+        std::cerr << "Failed to start mesh protocol!" << std::endl;
         return false;
     }
 
+    // Start autonomous agent
     if (!drone_agent->Start()) {
-        std::cerr << "❌ Не вдалося запустити агент!" << std::endl;
+        std::cerr << "Failed to start autonomous agent!" << std::endl;
         return false;
     }
 
-    std::cout << "✅ Система запущена!" << std::endl;
+    std::cout << "All systems started successfully!" << std::endl;
     return true;
 }
 
 void StopAllSystems() {
-    std::cout << "🛑 Зупинка систем..." << std::endl;
+    std::cout << "Stopping all systems..." << std::endl;
 
-    if (drone_agent) drone_agent->Stop();
-    if (mesh_protocol) mesh_protocol->Stop();
-    if (uwb_manager) uwb_manager->Stop();
-    if (comm_manager) comm_manager->stop();
-
-    std::cout << "✅ Всі системи зупинені" << std::endl;
-}
-
-// Функции для статуса (упрощенные версии)
-void PrintDroneStatus() {
-    std::cout << "\n=== СТАН ДРОНА ===" << std::endl;
-    std::cout << "🚁 ID: " << my_id << std::endl;
-
-    if (comm_manager) {
-        std::cout << "📡 RSSI: " << static_cast<int>(comm_manager->get_current_rssi()) << " dBm" << std::endl;
-        std::cout << "🔗 Якість: " << static_cast<int>(comm_manager->get_link_quality() * 100) << "%" << std::endl;
-    }
-
-    if (mesh_protocol) {
-        auto stats = mesh_protocol->GetNetworkStats();
-        std::cout << "🕸️ Mesh: " << stats.packets_sent << "/" << stats.packets_received << " пакетів" << std::endl;
+    if (config_watcher) {
+        config_watcher->stop();
     }
 
     if (drone_agent) {
-        auto state = drone_agent->GetMissionState();
-        std::cout << "🤖 Стан: " << static_cast<int>(state) << std::endl;
+        drone_agent->Stop();
     }
+
+    if (mesh_protocol) {
+        mesh_protocol->Stop();
+    }
+
+    if (comm_manager) {
+        comm_manager->stop();
+    }
+
+    std::cout << "All systems stopped." << std::endl;
 }
 
-void PrintHelp() {
-    std::cout << R"(
-ДОСТУПНІ КОМАНДИ:
-  h, help         - Показати довідку
-  s, status       - Показати стан дрона
-  q, quit, exit   - Вихід
-  emergency       - АВАРІЙНА ЗУПИНКА
-  test_mesh       - Тест mesh-зв'язку
-)" << std::endl;
+void PrintSystemStatus() {
+    if (!comm_manager) return;
+
+    auto stats = comm_manager->get_communication_stats();
+
+    std::cout << "\n" << std::string(60, '=') << std::endl;
+    std::cout << "SYSTEM STATUS" << std::endl;
+    std::cout << std::string(60, '=') << std::endl;
+
+    std::cout << "Drone ID: " << my_id << std::endl;
+    std::cout << "Frequency: " << (comm_manager->get_current_frequency() / 1000000.0) << " MHz" << std::endl;
+    std::cout << "RSSI: " << static_cast<int>(comm_manager->get_current_rssi()) << " dBm" << std::endl;
+    std::cout << "Link Quality: " << (comm_manager->get_link_quality() * 100) << "%" << std::endl;
+    std::cout << "Messages Sent: " << stats.messages_sent << std::endl;
+    std::cout << "Messages Received: " << stats.messages_received << std::endl;
+    std::cout << "Messages Failed: " << stats.messages_failed << std::endl;
+    std::cout << "Frequency Hops: " << stats.frequency_hops << std::endl;
+    std::cout << "Packet Loss: " << (stats.packet_loss_rate * 100) << "%" << std::endl;
+
+    // Encryption status
+    std::cout << "Encryption: " << (comm_manager->is_encryption_enabled() ? "ENABLED" : "DISABLED") << std::endl;
+
+    // Crypto stats
+    if (crypto_manager) {
+        auto crypto_stats = crypto_manager->GetStatistics();
+        std::cout << "Messages Encrypted: " << crypto_stats.messages_encrypted << std::endl;
+        std::cout << "Messages Decrypted: " << crypto_stats.messages_decrypted << std::endl;
+        std::cout << "Auth Failures: " << crypto_stats.authentication_failures << std::endl;
+        std::cout << "Replay Attacks Blocked: " << crypto_stats.replay_attacks_detected << std::endl;
+    }
+
+    std::cout << std::string(60, '=') << std::endl;
 }
 
-void processDistributedCommands() {
-    // ✅ РЕАЛЬНАЯ обработка распределенных команд
-    if (mesh_protocol && mesh_protocol->HasPendingCommands()) {
-        auto commands = mesh_protocol->GetPendingCommands();
+void RunSystemTests() {
+    std::cout << "\nRunning system tests..." << std::endl;
 
-        for (const auto& command : commands) {
-            if (autonomous_agent) {
-                bool success = autonomous_agent->ProcessDistributedCommand(command);
+    // Test 1: Basic message transmission
+    std::cout << "Test 1: Basic message transmission..." << std::endl;
+    SwarmControl::SwarmMessage test_msg;
+    test_msg.type = SwarmControl::MessageType::HEARTBEAT;
+    test_msg.source_id = my_id;
+    test_msg.destination_id = 0xFFFF; // Broadcast
+    test_msg.payload = {'T', 'E', 'S', 'T'};
+    test_msg.priority = 128;
 
-                if (success) {
-                    std::cout << "✅ Распределенная команда выполнена: тип "
-                              << command.command_type << " от дрона " << command.originator_id << std::endl;
-                } else {
-                    std::cout << "❌ Ошибка выполнения команды от дрона " << command.originator_id << std::endl;
-                }
-            }
+    if (comm_manager->send_message(test_msg)) {
+        std::cout << "✓ Message transmission test passed" << std::endl;
+    } else {
+        std::cout << "✗ Message transmission test failed" << std::endl;
+    }
+
+    // Test 2: Encryption test
+    std::cout << "Test 2: Encryption functionality..." << std::endl;
+    SwarmControl::SwarmMessage encrypted_msg = test_msg;
+    encrypted_msg.payload = {'S', 'E', 'C', 'R', 'E', 'T'};
+
+    if (comm_manager->encrypt_message(encrypted_msg)) {
+        std::cout << "✓ Message encryption test passed" << std::endl;
+
+        // Test decryption
+        if (comm_manager->decrypt_message(encrypted_msg)) {
+            std::cout << "✓ Message decryption test passed" << std::endl;
+        } else {
+            std::cout << "✗ Message decryption test failed" << std::endl;
         }
-
-        // Очищаем обработанные команды
-        mesh_protocol->ClearProcessedCommands();
+    } else {
+        std::cout << "✗ Message encryption test failed" << std::endl;
     }
 
-    // Проверяем команды от ground station через LoRa
-    if (comm_manager && comm_manager->has_incoming_messages()) {
-        // Обрабатываем команды от наземной станции
-        processGroundStationCommands();
-    }
-}
+    // Test 3: Frequency hopping
+    std::cout << "Test 3: Frequency hopping..." << std::endl;
+    uint32_t original_freq = comm_manager->get_current_frequency();
+    std::vector<uint32_t> test_frequencies = {433175000, 868300000, 915000000};
 
-void processGroundStationCommands() {
-    // ✅ РЕАЛЬНАЯ обработка команд от ground station
-    while (comm_manager->has_incoming_messages()) {
-        SwarmControl::SwarmMessage message;
-        if (comm_manager->get_next_message(message)) {
+    if (comm_manager->update_frequency_list(test_frequencies)) {
+        std::cout << "✓ Frequency list update test passed" << std::endl;
 
-            switch (message.type) {
-                case SwarmControl::MessageType::COMMAND:
-                    handleGroundStationCommand(message);
-                    break;
-
-                case SwarmControl::MessageType::FORMATION_UPDATE:
-                    handleFormationUpdate(message);
-                    break;
-
-                case SwarmControl::MessageType::MISSION_UPDATE:
-                    handleMissionUpdate(message);
-                    break;
-
-                case SwarmControl::MessageType::EMERGENCY:
-                    handleEmergencyCommand(message);
-                    break;
-
-                default:
-                    // Передаем другие сообщения mesh протоколу
-                    if (mesh_protocol) {
-                        mesh_protocol->ProcessExternalMessage(message);
-                    }
-                    break;
-            }
+        // Test frequency change
+        if (comm_manager->change_frequency(868300000)) {
+            std::cout << "✓ Frequency change test passed" << std::endl;
+        } else {
+            std::cout << "✗ Frequency change test failed" << std::endl;
         }
+    } else {
+        std::cout << "✗ Frequency list update test failed" << std::endl;
     }
-}
 
-void handleGroundStationCommand(const SwarmControl::SwarmMessage& message) {
-    // Декодируем команду из payload
-    if (message.payload.size() >= sizeof(DistributedCommand)) {
-        DistributedCommand command;
-        std::memcpy(&command, message.payload.data(), sizeof(DistributedCommand));
-
-        // Выполняем команду
-        if (autonomous_agent) {
-            autonomous_agent->ProcessDistributedCommand(command);
-        }
-
-        std::cout << "📡 Команда от ground station выполнена" << std::endl;
+    // Test 4: Power adaptation
+    std::cout << "Test 4: Power adaptation..." << std::endl;
+    if (comm_manager->set_power_level(15)) {
+        std::cout << "✓ Power level test passed" << std::endl;
+    } else {
+        std::cout << "✗ Power level test failed" << std::endl;
     }
+
+    std::cout << "System tests completed." << std::endl;
 }
 
 int main(int argc, char* argv[]) {
-    // Перевірка аргументів
-    if (argc < 2) {
-        std::cerr << "Використання: " << argv[0] << " <drone_id> [config_path]" << std::endl;
-        std::cerr << "Приклад: " << argv[0] << " 0201 ./config/swarm_config.yaml" << std::endl;
-        return 1;
+    // Parse command line arguments
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " <drone_id> <config_path>" << std::endl;
+        std::cerr << "Example: " << argv[0] << " 101 ./config/swarm_config.yaml" << std::endl;
+        return -1;
     }
 
-    // Встановлення обробників сигналів
+    my_id = std::stoi(argv[1]);
+    config_path = argv[2];
+
+    if (my_id < 1 || my_id > 65535) {
+        std::cerr << "Invalid drone ID: " << my_id << " (must be 1-65535)" << std::endl;
+        return -1;
+    }
+
+    // Set up signal handlers
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
 
     PrintBanner();
+    std::cout << "Starting drone #" << my_id << " with config: " << config_path << std::endl;
 
-    // Парсинг аргументів
-    my_id = static_cast<DroneID>(std::stoul(argv[1]));
-    config_path = (argc > 2) ? argv[2] : "./config/swarm_config.yaml";
-
-    if (!VALIDATE_DRONE_ID(my_id)) {
-        std::cerr << "❌ Невірний ID дрона: " << my_id << std::endl;
-        return 1;
+    // Initialize all systems
+    if (!InitializeAllSystems()) {
+        std::cerr << "System initialization failed!" << std::endl;
+        return -1;
     }
 
-    std::cout << "🚁 Ініціалізація розподіленого дрона ID: " << my_id << std::endl;
-    std::cout << "📁 Конфігурація: " << config_path << std::endl;
-
-    try {
-        // Инициализация системы
-        if (!InitializeAllSystems()) {
-            std::cerr << "❌ ПОМИЛКА: Не вдалося ініціалізувати систему!" << std::endl;
-            return 1;
-        }
-
-        // Запуск системы
-        if (!StartAllSystems()) {
-            std::cerr << "❌ ПОМИЛКА: Не вдалося запустити систему!" << std::endl;
-            StopAllSystems();
-            return 1;
-        }
-
-        std::cout << "\n✅ Розподілена система управління роєм запущена успішно!" << std::endl;
-        std::cout << "📡 Mesh-мережа активна" << std::endl;
-        std::cout << "🗺️ Динамічне позиціонування увімкнене" << std::endl;
-        std::cout << "🤖 Автономний агент готовий" << std::endl;
-
-        PrintHelp();
-
-        // Основной цикл интерфейса
-        std::string command;
-        while (!g_shutdown_requested) {
-            std::cout << "\nmesh[" << my_id << "]> ";
-
-            if (!std::getline(std::cin, command)) {
-                break;
-            }
-
-            if (command.empty()) continue;
-
-            std::istringstream iss(command);
-            std::string cmd;
-            iss >> cmd;
-
-            if (cmd == "h" || cmd == "help") {
-                PrintHelp();
-            }
-            else if (cmd == "s" || cmd == "status") {
-                PrintDroneStatus();
-            }
-            else if (cmd == "test_mesh") {
-                if (mesh_protocol) {
-                    // Простой тест mesh
-                    std::vector<uint8_t> test_data = {'T', 'E', 'S', 'T'};
-                    if (mesh_protocol->BroadcastMessage(test_data, 128)) {
-                        std::cout << "✅ Тест mesh-зв'язку успішний" << std::endl;
-                    } else {
-                        std::cout << "❌ Проблема з mesh-зв'язком" << std::endl;
-                    }
-                }
-            }
-            else if (cmd == "emergency") {
-                std::cout << "🚨 АВАРІЙНА ЗУПИНКА!" << std::endl;
-                break;
-            }
-            else if (cmd == "q" || cmd == "quit" || cmd == "exit") {
-                std::cout << "Вихід..." << std::endl;
-                break;
-            }
-            else {
-                std::cout << "❌ Невідома команда: " << cmd << std::endl;
-                std::cout << "Введіть 'help' для списку команд" << std::endl;
-            }
-        }
-
-        // Корректное завершение
-        std::cout << "\n⏹️ Зупинка розподіленої системи..." << std::endl;
+    // Start all systems
+    if (!StartAllSystems()) {
+        std::cerr << "System startup failed!" << std::endl;
         StopAllSystems();
-
-    } catch (const std::exception& e) {
-        std::cerr << "💥 КРИТИЧНА ПОМИЛКА: " << e.what() << std::endl;
-        StopAllSystems();
-        return 1;
+        return -1;
     }
 
-    std::cout << "\n✅ Розподілена система зупинена успішно" << std::endl;
+    // Run system tests
+    RunSystemTests();
 
+    // Main operation loop
+    std::cout << "\nSystem operational. Press Ctrl+C to shutdown." << std::endl;
 
+    auto last_status_print = std::chrono::steady_clock::now();
+    auto last_key_rotation = std::chrono::steady_clock::now();
+
+    while (!g_shutdown_requested.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+        auto now = std::chrono::steady_clock::now();
+
+        // Print status every 30 seconds
+        if (now - last_status_print > std::chrono::seconds(30)) {
+            PrintSystemStatus();
+            last_status_print = now;
+        }
+
+        // Rotate encryption keys every 10 minutes
+        if (now - last_key_rotation > std::chrono::minutes(10)) {
+            std::cout << "Rotating encryption keys..." << std::endl;
+            if (comm_manager->rotate_encryption_key()) {
+                std::cout << "Encryption key rotation successful" << std::endl;
+            } else {
+                std::cout << "Encryption key rotation failed" << std::endl;
+            }
+            last_key_rotation = now;
+        }
+
+        // Check for interference and adapt
+        if (comm_manager->detect_interference()) {
+            std::cout << "Interference detected - system adapting..." << std::endl;
+        }
+
+        // Adaptive power control
+        comm_manager->adapt_transmission_power();
+    }
+
+    // Graceful shutdown
+    std::cout << "\nShutdown requested..." << std::endl;
+    StopAllSystems();
+
+    std::cout << "System shutdown complete." << std::endl;
     return 0;
 }
