@@ -148,8 +148,26 @@ namespace SwarmControl {
             last_full_update = std::chrono::steady_clock::now();
         }
     };
+    static const uint8_t UWB_REG_TX_POWER = 0x1E;
+    static const uint8_t UWB_REG_AGC_CTRL1 = 0x23;
+    static const uint8_t UWB_REG_LNA_PA_CTRL = 0x26;
+    static const uint8_t UWB_REG_CHANNEL = 0x1F;
+    static const uint8_t UWB_REG_PREAMBLE_LENGTH = 0x20;
+    static const uint8_t UWB_REG_RANGING_MODE = 0x21;
+    static const uint8_t UWB_REG_RX_TIMEOUT = 0x22;
+    static const uint8_t UWB_REG_MEASUREMENT_INTERVAL = 0x24;
+    static const uint8_t UWB_REG_TX_ANTENNA_DELAY = 0x18;
+    static const uint8_t UWB_REG_RX_ANTENNA_DELAY = 0x19;
+    static const uint8_t UWB_REG_PREAMBLE_TIMEOUT = 0x25;
 
-// Main UWB Manager class
+// UWB mode constants
+    static const uint8_t UWB_MODE_TWR = 0x01;
+    static const uint8_t UWB_MODE_DS_TWR = 0x02;
+    static const uint8_t UWB_MODE_SS_TWR = 0x03;
+    static const uint8_t UWB_MODE_TDOA = 0x04;
+
+
+    // Main UWB Manager class
     class UWBManager {
     private:
         // Core components
@@ -168,6 +186,16 @@ namespace SwarmControl {
         // Configuration
         UWBConfig current_config_;
         mutable std::mutex config_mutex_;
+
+        // Configuration state
+        mutable std::mutex config_mutex_;
+        mutable std::mutex calibration_mutex_;
+        mutable std::mutex channel_mutex_;
+        mutable std::mutex preamble_mutex_;
+        mutable std::mutex outlier_mutex_;
+        mutable std::mutex positioning_mutex_;
+        mutable std::mutex measurement_mutex_;
+        mutable std::mutex ranging_mutex_;
 
         // State management
         std::atomic<bool> running_;
@@ -202,6 +230,80 @@ namespace SwarmControl {
         static constexpr auto NODE_TIMEOUT = std::chrono::seconds(5);
         static constexpr auto RANGING_INTERVAL = std::chrono::milliseconds(100);
         static constexpr auto POSITION_CALC_INTERVAL = std::chrono::milliseconds(50);
+
+        mutable std::mutex config_mutex_;
+        mutable std::mutex calibration_mutex_;
+        mutable std::mutex channel_mutex_;
+        mutable std::mutex preamble_mutex_;
+        mutable std::mutex outlier_mutex_;
+        mutable std::mutex positioning_mutex_;
+        mutable std::mutex measurement_mutex_;
+        mutable std::mutex ranging_mutex_;
+
+        // Current settings
+        UWBRangingMode current_ranging_mode_ = UWBRangingMode::DS_TWR;
+        double max_ranging_distance_m_ = 100.0;
+        double position_accuracy_threshold_m_ = 0.1;
+        bool outlier_rejection_enabled_ = true;
+        uint16_t update_rate_hz_ = 100;
+        uint32_t measurement_interval_ms_ = 100;
+        uint16_t tx_antenna_delay_ = 16456;
+        uint16_t rx_antenna_delay_ = 16456;
+
+        // Pending changes (for restart-required settings)
+        uint8_t pending_channel_ = 0;
+        uint16_t pending_preamble_length_ = 0;
+        bool channel_change_pending_ = false;
+        bool preamble_change_pending_ = false;
+
+        // Update control
+        std::chrono::milliseconds update_interval_ = std::chrono::milliseconds(10);
+        bool update_rate_changed_ = false;
+        bool positioning_thread_running_ = false;
+        std::condition_variable positioning_condition_;
+
+        // Restart management
+        bool restart_required_ = false;
+        std::string restart_reason_;
+        std::condition_variable restart_condition_;
+
+        // Calibration state
+        bool calibration_valid_ = false;
+        std::chrono::steady_clock::time_point calibration_timestamp_;
+        double temperature_coefficient_ = 0.0;
+
+        // Filter and detection objects
+        KalmanFilter position_filter_;
+        OutlierDetector outlier_detector_;
+        UWBStatistics statistics_;
+
+        // Hardware interaction methods
+        uint8_t read_uwb_register(uint8_t address) const;
+        void write_uwb_register(uint8_t address, uint8_t value);
+        uint16_t read_uwb_register_16(uint8_t address) const;
+        void write_uwb_register_16(uint8_t address, uint16_t value);
+        uint32_t read_uwb_register_32(uint8_t address) const;
+        void write_uwb_register_32(uint8_t address, uint32_t value);
+
+        // Helper methods
+        uint8_t calculate_lna_gain(uint8_t gain_level) const;
+        uint32_t calculate_interval_register_value(uint32_t interval_ms) const;
+        void configure_ranging_timing(UWBRangingMode mode);
+        uint32_t calculate_ranging_timeout(double max_distance_m) const;
+        uint16_t calculate_preamble_timeout(double max_distance_m) const;
+        void schedule_uwb_restart(const std::string& reason);
+        void log_uwb_event(const std::string& event, const std::string& details = "") const;
+
+        // Calibration and diagnostic methods
+        double measure_crystal_offset();
+        bool calibrate_antenna_delays();
+        double measure_temperature_coefficient();
+        bool validate_calibration();
+        bool test_register_access();
+        bool test_crystal_oscillator();
+        bool test_rf_frontend();
+        bool test_digital_processing();
+        bool test_antenna_integrity();
 
     public:
         // Constructor/Destructor

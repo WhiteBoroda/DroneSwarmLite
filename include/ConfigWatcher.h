@@ -23,7 +23,11 @@ namespace SwarmSystem {
     namespace SwarmControl {
         class CommunicationManager;
     }
+    class CommunicationManager;
     class UWBManager;
+    class FormationController;
+    class PowerManager;
+    class SafetyManager;
 
 // Callback types for configuration changes
     using ConfigChangeCallback = std::function<bool(const std::string& section, const std::string& key, const std::string& old_value, const std::string& new_value)>;
@@ -115,6 +119,12 @@ namespace SwarmSystem {
         std::atomic<bool> watching_;
         std::thread watch_thread_;
 
+        std::shared_ptr<CommunicationManager> communication_manager_;
+        std::shared_ptr<UWBManager> uwb_manager_;
+        std::shared_ptr<FormationController> formation_controller_;
+        std::shared_ptr<PowerManager> power_manager_;
+        std::shared_ptr<SafetyManager> safety_manager_;
+
         // File monitoring
         std::filesystem::file_time_type last_write_time_;
         std::chrono::milliseconds poll_interval_;
@@ -142,6 +152,18 @@ namespace SwarmSystem {
         ConfigChangeSeverity determineChangeSeverity(const ConfigChange& change);
         std::string generateChangeDescription(const ConfigChange& change);
         bool applyConfigChange(const ConfigChange& change);
+        bool applyLoRaConfigChange(const ConfigChange& change);
+        bool applyELRSConfigChange(const ConfigChange& change);
+        bool applyUWBConfigChange(const ConfigChange& change);
+        bool applyMeshConfigChange(const ConfigChange& change);
+        bool applyFormationConfigChange(const ConfigChange& change);
+        bool applyPowerConfigChange(const ConfigChange& change);
+        bool applySafetyConfigChange(const ConfigChange& change);
+        std::vector<uint32_t> parseFrequencyList(const std::string& freq_string);
+        UWBRangingMode parseRangingMode(const std::string& mode_string);
+        ConfigChangeSeverity determineChangeSeverity(const ConfigChange& change);
+        std::string generateChangeDescription(const ConfigChange& change);
+        std::function<void(const std::string&)> restart_callback_;
 
     public:
         explicit ConfigWatcher(std::shared_ptr<ConfigManager> config_mgr,
@@ -165,6 +187,13 @@ namespace SwarmSystem {
         std::vector<ConfigChange> getPendingChanges() const;
         bool isWatching() const;
         std::chrono::system_clock::time_point getLastUpdateTime() const;
+
+        void registerCommunicationManager(std::shared_ptr<CommunicationManager> comm_mgr);
+        void registerUWBManager(std::shared_ptr<UWBManager> uwb_mgr);
+        void registerFormationController(std::shared_ptr<FormationController> form_ctrl);
+        void registerPowerManager(std::shared_ptr<PowerManager> power_mgr);
+        void registerSafetyManager(std::shared_ptr<SafetyManager> safety_mgr);
+        void registerRestartCallback(std::function<void(const std::string&)> callback);
     };
 
 } // namespace SwarmSystem

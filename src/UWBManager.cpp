@@ -1900,9 +1900,21 @@ bool UWBManager::SetTxPower(uint8_t power_level) {
     return true;
 }
 
-uint8_t UWBManager::GetTxPower() const {
-    // TODO: Read from actual hardware
-    return 20; // Stub - default power level
+int8_t UWBManager::GetTxPower() const {
+    try {
+        // Read actual power level from UWB hardware
+        uint8_t power_reg = read_uwb_register(UWB_REG_TX_POWER);
+
+        // Convert register value to dBm (DW1000/DW3000 specific conversion)
+        int8_t power_dbm = static_cast<int8_t>((power_reg * 0.5) - 18.0);
+
+        log_uwb_event("TX Power read", std::to_string(power_dbm) + " dBm");
+        return power_dbm;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB GetTxPower failed: " << e.what() << std::endl;
+        return -10; // Safe default
+    }
 }
 
 bool UWBManager::SetRxGain(uint8_t gain_level) {
@@ -1911,28 +1923,79 @@ bool UWBManager::SetRxGain(uint8_t gain_level) {
         return false;
     }
 
-    // TODO: Apply to actual UWB hardware
-    std::cout << "✅ UWB RX gain updated: " << static_cast<int>(gain_level) << std::endl;
-    return true;
+    try {
+        // Apply gain to actual UWB hardware (DW1000/DW3000)
+        write_uwb_register(UWB_REG_AGC_CTRL1, gain_level & 0x3F);
+
+        // Update LNA gain register
+        uint8_t lna_gain = calculate_lna_gain(gain_level);
+        write_uwb_register(UWB_REG_LNA_PA_CTRL, lna_gain);
+
+        // Verify setting was applied
+        uint8_t readback = read_uwb_register(UWB_REG_AGC_CTRL1);
+        if ((readback & 0x3F) != (gain_level & 0x3F)) {
+            std::cerr << "❌ UWB RX gain verification failed" << std::endl;
+            return false;
+        }
+
+        std::cout << "✅ UWB RX gain updated: " << static_cast<int>(gain_level) << std::endl;
+        log_uwb_event("RX Gain set", std::to_string(gain_level));
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetRxGain failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 uint8_t UWBManager::GetRxGain() const {
-    return 32; // Stub - default gain
+    try {
+        uint8_t gain_reg = read_uwb_register(UWB_REG_AGC_CTRL1);
+        uint8_t gain_level = gain_reg & 0x3F;
+
+        log_uwb_event("RX Gain read", std::to_string(gain_level));
+        return gain_level;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB GetRxGain failed: " << e.what() << std::endl;
+        return 32; // Safe default
+    }
 }
 
-bool UWBManager::SetUpdateRate(uint16_t rate_hz) {
+bbool UWBManager::SetUpdateRate(uint16_t rate_hz) {
     if (rate_hz < 1 || rate_hz > 1000) {
         std::cerr << "❌ Invalid UWB update rate: " << rate_hz << " Hz (range: 1-1000)" << std::endl;
         return false;
     }
 
-    // TODO: Update positioning thread timing
-    std::cout << "✅ UWB update rate changed: " << rate_hz << " Hz" << std::endl;
-    return true;
+    try {
+        // Update positioning thread timing with real implementation
+        std::lock_guard<std::mutex> lock(positioning_mutex_);
+
+        // Calculate new update interval
+        auto new_interval = std::chrono::milliseconds(1000 / rate_hz);
+        update_rate_hz_ = rate_hz;
+        update_interval_ = new_interval;
+
+        // Signal positioning thread to use new rate
+        if (positioning_thread_running_) {
+            update_rate_changed_ = true;
+            positioning_condition_.notify_one();
+        }
+
+        std::cout << "✅ UWB update rate changed: " << rate_hz << " Hz" << std::endl;
+        log_uwb_event("Update rate changed", std::to_string(rate_hz) + " Hz");
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetUpdateRate failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 uint16_t UWBManager::GetUpdateRate() const {
-    return 100; // Stub - default 100 Hz
+    std::lock_guard<std::mutex> lock(positioning_mutex_);
+    return update_rate_hz_;
 }
 
 bool UWBManager::SetMeasurementInterval(uint32_t interval_ms) {
@@ -1941,40 +2004,93 @@ bool UWBManager::SetMeasurementInterval(uint32_t interval_ms) {
         return false;
     }
 
-    // TODO: Update measurement timing
-    std::cout << "✅ UWB measurement interval updated: " << interval_ms << " ms" << std::endl;
-    return true;
+    try {
+        // Update measurement timing in hardware
+        uint32_t interval_reg_value = calculate_interval_register_value(interval_ms);
+        write_uwb_register_32(UWB_REG_MEASUREMENT_INTERVAL, interval_reg_value);
+
+        // Update internal tracking
+        std::lock_guard<std::mutex> lock(measurement_mutex_);
+        measurement_interval_ms_ = interval_ms;
+
+        // Verify hardware setting
+        uint32_t readback = read_uwb_register_32(UWB_REG_MEASUREMENT_INTERVAL);
+        if (readback != interval_reg_value) {
+            std::cerr << "❌ UWB measurement interval verification failed" << std::endl;
+            return false;
+        }
+
+        std::cout << "✅ UWB measurement interval updated: " << interval_ms << " ms" << std::endl;
+        log_uwb_event("Measurement interval set", std::to_string(interval_ms) + " ms");
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetMeasurementInterval failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 uint32_t UWBManager::GetMeasurementInterval() const {
-    return 100; // Stub - 100ms default
+    std::lock_guard<std::mutex> lock(measurement_mutex_);
+    return measurement_interval_ms_;
 }
 
+//  SetRangingMode
 bool UWBManager::SetRangingMode(UWBRangingMode mode) {
-    switch (mode) {
-        case UWBRangingMode::TWR:
-            std::cout << "✅ UWB ranging mode: Two-Way Ranging" << std::endl;
-            break;
-        case UWBRangingMode::DS_TWR:
-            std::cout << "✅ UWB ranging mode: Double-Sided TWR" << std::endl;
-            break;
-        case UWBRangingMode::SS_TWR:
-            std::cout << "✅ UWB ranging mode: Single-Sided TWR" << std::endl;
-            break;
-        case UWBRangingMode::TDOA:
-            std::cout << "✅ UWB ranging mode: Time Difference of Arrival" << std::endl;
-            break;
-        default:
-            std::cerr << "❌ Invalid UWB ranging mode" << std::endl;
-            return false;
-    }
+    try {
+        uint8_t mode_reg_value;
 
-    // TODO: Apply to actual UWB hardware configuration
-    return true;
+        switch (mode) {
+            case UWBRangingMode::TWR:
+                std::cout << "✅ UWB ranging mode: Two-Way Ranging" << std::endl;
+                mode_reg_value = UWB_MODE_TWR;
+                break;
+            case UWBRangingMode::DS_TWR:
+                std::cout << "✅ UWB ranging mode: Double-Sided TWR" << std::endl;
+                mode_reg_value = UWB_MODE_DS_TWR;
+                break;
+            case UWBRangingMode::SS_TWR:
+                std::cout << "✅ UWB ranging mode: Single-Sided TWR" << std::endl;
+                mode_reg_value = UWB_MODE_SS_TWR;
+                break;
+            case UWBRangingMode::TDOA:
+                std::cout << "✅ UWB ranging mode: Time Difference of Arrival" << std::endl;
+                mode_reg_value = UWB_MODE_TDOA;
+                break;
+            default:
+                std::cerr << "❌ Invalid UWB ranging mode" << std::endl;
+                return false;
+        }
+
+        // Apply ranging mode to actual UWB hardware configuration
+        write_uwb_register(UWB_REG_RANGING_MODE, mode_reg_value);
+
+        // Configure timing parameters based on mode
+        configure_ranging_timing(mode);
+
+        // Update internal state
+        std::lock_guard<std::mutex> lock(ranging_mutex_);
+        current_ranging_mode_ = mode;
+
+        // Verify configuration
+        uint8_t readback = read_uwb_register(UWB_REG_RANGING_MODE);
+        if (readback != mode_reg_value) {
+            std::cerr << "❌ UWB ranging mode verification failed" << std::endl;
+            return false;
+        }
+
+        log_uwb_event("Ranging mode set", std::to_string(static_cast<int>(mode)));
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetRangingMode failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 UWBRangingMode UWBManager::GetRangingMode() const {
-    return UWBRangingMode::DS_TWR; // Stub - default mode
+    std::lock_guard<std::mutex> lock(ranging_mutex_);
+    return current_ranging_mode_;
 }
 
 bool UWBManager::SetMaxRangingDistance(double max_distance_m) {
@@ -1983,13 +2099,32 @@ bool UWBManager::SetMaxRangingDistance(double max_distance_m) {
         return false;
     }
 
-    // TODO: Configure hardware timing windows based on distance
-    std::cout << "✅ UWB max ranging distance: " << max_distance_m << " m" << std::endl;
-    return true;
+    try {
+        // Configure hardware timing windows based on distance
+        uint32_t timeout_value = calculate_ranging_timeout(max_distance_m);
+        write_uwb_register_32(UWB_REG_RX_TIMEOUT, timeout_value);
+
+        // Adjust preamble detection timeout
+        uint16_t preamble_timeout = calculate_preamble_timeout(max_distance_m);
+        write_uwb_register_16(UWB_REG_PREAMBLE_TIMEOUT, preamble_timeout);
+
+        // Update internal tracking
+        std::lock_guard<std::mutex> lock(ranging_mutex_);
+        max_ranging_distance_m_ = max_distance_m;
+
+        std::cout << "✅ UWB max ranging distance: " << max_distance_m << " m" << std::endl;
+        log_uwb_event("Max ranging distance set", std::to_string(max_distance_m) + " m");
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetMaxRangingDistance failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 double UWBManager::GetMaxRangingDistance() const {
-    return 100.0; // Stub - 100m default
+    std::lock_guard<std::mutex> lock(ranging_mutex_);
+    return max_ranging_distance_m_;
 }
 
 bool UWBManager::SetPositionAccuracyThreshold(double threshold_m) {
@@ -1998,23 +2133,65 @@ bool UWBManager::SetPositionAccuracyThreshold(double threshold_m) {
         return false;
     }
 
-    // TODO: Update position filtering
-    std::cout << "✅ UWB accuracy threshold: " << threshold_m << " m" << std::endl;
-    return true;
+    try {
+        // Update position filtering with real Kalman filter parameters
+        std::lock_guard<std::mutex> lock(positioning_mutex_);
+
+        // Adjust Kalman filter process noise based on accuracy requirement
+        double process_noise = threshold_m * 0.1; // Scale process noise
+        position_filter_.setProcessNoise(process_noise);
+
+        // Adjust measurement noise covariance
+        double measurement_noise = threshold_m * 0.5;
+        position_filter_.setMeasurementNoise(measurement_noise);
+
+        position_accuracy_threshold_m_ = threshold_m;
+
+        std::cout << "✅ UWB accuracy threshold: " << threshold_m << " m" << std::endl;
+        log_uwb_event("Accuracy threshold set", std::to_string(threshold_m) + " m");
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetPositionAccuracyThreshold failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 double UWBManager::GetPositionAccuracyThreshold() const {
-    return 0.1; // Stub - 10cm default
+    std::lock_guard<std::mutex> lock(positioning_mutex_);
+    return position_accuracy_threshold_m_;
 }
 
+
 bool UWBManager::EnableOutlierRejection(bool enable) {
-    // TODO: Enable/disable outlier filtering
-    std::cout << "✅ UWB outlier rejection: " << (enable ? "enabled" : "disabled") << std::endl;
-    return true;
+    try {
+        std::lock_guard<std::mutex> lock(outlier_mutex_);
+
+        outlier_rejection_enabled_ = enable;
+
+        if (enable) {
+            // Initialize outlier detection with RANSAC-like algorithm
+            outlier_detector_.setEnabled(true);
+            outlier_detector_.setDistanceThreshold(position_accuracy_threshold_m_ * 3.0);
+            outlier_detector_.setMinInliers(3); // Minimum 3 good measurements
+            outlier_detector_.setMaxIterations(100);
+        } else {
+            outlier_detector_.setEnabled(false);
+        }
+
+        std::cout << "✅ UWB outlier rejection: " << (enable ? "enabled" : "disabled") << std::endl;
+        log_uwb_event("Outlier rejection", enable ? "enabled" : "disabled");
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB EnableOutlierRejection failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool UWBManager::IsOutlierRejectionEnabled() const {
-    return true; // Stub - enabled by default
+    std::lock_guard<std::mutex> lock(outlier_mutex_);
+    return outlier_rejection_enabled_;
 }
 
 bool UWBManager::SetChannel(uint8_t channel) {
@@ -2023,14 +2200,44 @@ bool UWBManager::SetChannel(uint8_t channel) {
         return false;
     }
 
-    // TODO: Apply channel to hardware - requires restart
-    std::cout << "⚠️ UWB channel change to " << static_cast<int>(channel)
-              << " requires component restart!" << std::endl;
-    return false; // Indicate restart required
+    try {
+        // Check if channel change requires restart
+        uint8_t current_channel = read_uwb_register(UWB_REG_CHANNEL);
+        if (current_channel == channel) {
+            std::cout << "ℹ️ UWB channel already set to " << static_cast<int>(channel) << std::endl;
+            return true;
+        }
+
+        // Apply channel to hardware - this requires UWB restart
+        std::cout << "⚠️ UWB channel change to " << static_cast<int>(channel)
+                  << " requires component restart!" << std::endl;
+
+        // Store pending channel change
+        std::lock_guard<std::mutex> lock(channel_mutex_);
+        pending_channel_ = channel;
+        channel_change_pending_ = true;
+
+        // Schedule restart
+        schedule_uwb_restart("Channel change");
+
+        log_uwb_event("Channel change scheduled", std::to_string(channel));
+        return false; // Indicate restart required
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetChannel failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 uint8_t UWBManager::GetChannel() const {
-    return 5; // Stub - default channel
+    try {
+        uint8_t channel = read_uwb_register(UWB_REG_CHANNEL);
+        log_uwb_event("Channel read", std::to_string(channel));
+        return channel;
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB GetChannel failed: " << e.what() << std::endl;
+        return 5; // Safe default
+    }
 }
 
 bool UWBManager::SetPreambleLength(uint16_t length) {
@@ -2040,46 +2247,317 @@ bool UWBManager::SetPreambleLength(uint16_t length) {
         return false;
     }
 
-    // TODO: Apply to hardware - requires restart
-    std::cout << "⚠️ UWB preamble length change to " << length
-              << " requires component restart!" << std::endl;
-    return false; // Indicate restart required
+    try {
+        // Check current setting
+        uint16_t current_length = read_uwb_register_16(UWB_REG_PREAMBLE_LENGTH);
+        if (current_length == length) {
+            std::cout << "ℹ️ UWB preamble length already set to " << length << std::endl;
+            return true;
+        }
+
+        // Preamble length change requires restart
+        std::cout << "⚠️ UWB preamble length change to " << length
+                  << " requires component restart!" << std::endl;
+
+        // Store pending change
+        std::lock_guard<std::mutex> lock(preamble_mutex_);
+        pending_preamble_length_ = length;
+        preamble_change_pending_ = true;
+
+        // Schedule restart
+        schedule_uwb_restart("Preamble length change");
+
+        log_uwb_event("Preamble length change scheduled", std::to_string(length));
+        return false; // Indicate restart required
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetPreambleLength failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 uint16_t UWBManager::GetPreambleLength() const {
-    return 128; // Stub - default length
+    try {
+        uint16_t length = read_uwb_register_16(UWB_REG_PREAMBLE_LENGTH);
+        log_uwb_event("Preamble length read", std::to_string(length));
+        return length;
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB GetPreambleLength failed: " << e.what() << std::endl;
+        return 128; // Safe default
+    }
 }
 
 bool UWBManager::SetAntennaDelay(uint16_t tx_delay, uint16_t rx_delay) {
-    // TODO: Set antenna delays for calibration
-    std::cout << "✅ UWB antenna delays: TX=" << tx_delay << ", RX=" << rx_delay << std::endl;
-    return true;
+    try {
+        // Set antenna delays for calibration - these are critical for accuracy
+        write_uwb_register_16(UWB_REG_TX_ANTENNA_DELAY, tx_delay);
+        write_uwb_register_16(UWB_REG_RX_ANTENNA_DELAY, rx_delay);
+
+        // Verify settings
+        uint16_t tx_readback = read_uwb_register_16(UWB_REG_TX_ANTENNA_DELAY);
+        uint16_t rx_readback = read_uwb_register_16(UWB_REG_RX_ANTENNA_DELAY);
+
+        if (tx_readback != tx_delay || rx_readback != rx_delay) {
+            std::cerr << "❌ UWB antenna delay verification failed" << std::endl;
+            return false;
+        }
+
+        // Update internal tracking
+        std::lock_guard<std::mutex> lock(calibration_mutex_);
+        tx_antenna_delay_ = tx_delay;
+        rx_antenna_delay_ = rx_delay;
+
+        std::cout << "✅ UWB antenna delays: TX=" << tx_delay << ", RX=" << rx_delay << std::endl;
+        log_uwb_event("Antenna delays set", "TX=" + std::to_string(tx_delay) + ", RX=" + std::to_string(rx_delay));
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB SetAntennaDelay failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool UWBManager::GetAntennaDelay(uint16_t& tx_delay, uint16_t& rx_delay) const {
-    tx_delay = 16456; // Stub values
-    rx_delay = 16456;
-    return true;
+    try {
+        std::lock_guard<std::mutex> lock(calibration_mutex_);
+        tx_delay = tx_antenna_delay_;
+        rx_delay = rx_antenna_delay_;
+
+        log_uwb_event("Antenna delays read", "TX=" + std::to_string(tx_delay) + ", RX=" + std::to_string(rx_delay));
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB GetAntennaDelay failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool UWBManager::TriggerSelfCalibration() {
     std::cout << "🔧 Starting UWB self-calibration..." << std::endl;
-    // TODO: Run self-calibration procedure
-    std::cout << "✅ UWB self-calibration completed" << std::endl;
-    return true;
+
+    try {
+        // Run real self-calibration procedure
+        std::lock_guard<std::mutex> lock(calibration_mutex_);
+
+        // Step 1: Measure crystal offset
+        double crystal_offset = measure_crystal_offset();
+        if (std::abs(crystal_offset) > MAX_CRYSTAL_OFFSET_PPM) {
+            std::cerr << "❌ Crystal offset too large: " << crystal_offset << " ppm" << std::endl;
+            return false;
+        }
+
+        // Step 2: Calibrate antenna delays using known distances
+        bool antenna_cal_ok = calibrate_antenna_delays();
+        if (!antenna_cal_ok) {
+            std::cerr << "❌ Antenna delay calibration failed" << std::endl;
+            return false;
+        }
+
+        // Step 3: Measure and compensate temperature drift
+        double temp_coefficient = measure_temperature_coefficient();
+        temperature_coefficient_ = temp_coefficient;
+
+        // Step 4: Validate calibration with test measurements
+        bool validation_ok = validate_calibration();
+        if (!validation_ok) {
+            std::cerr << "❌ Calibration validation failed" << std::endl;
+            return false;
+        }
+
+        calibration_valid_ = true;
+        calibration_timestamp_ = std::chrono::steady_clock::now();
+
+        std::cout << "✅ UWB self-calibration completed successfully" << std::endl;
+        log_uwb_event("Self-calibration completed", "Crystal offset: " + std::to_string(crystal_offset) + " ppm");
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB TriggerSelfCalibration failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool UWBManager::RunDiagnostics() {
     std::cout << "🔍 Running UWB diagnostics..." << std::endl;
-    // TODO: Run hardware diagnostics
-    std::cout << "✅ UWB diagnostics passed" << std::endl;
-    return true;
+
+    try {
+        // Run comprehensive hardware diagnostics
+        bool all_passed = true;
+
+        // Test 1: Register access
+        bool reg_test = test_register_access();
+        std::cout << "  Register access: " << (reg_test ? "✅ PASS" : "❌ FAIL") << std::endl;
+        all_passed = all_passed && reg_test;
+
+        // Test 2: Crystal oscillator
+        bool crystal_test = test_crystal_oscillator();
+        std::cout << "  Crystal oscillator: " << (crystal_test ? "✅ PASS" : "❌ FAIL") << std::endl;
+        all_passed = all_passed && crystal_test;
+
+        // Test 3: RF frontend
+        bool rf_test = test_rf_frontend();
+        std::cout << "  RF frontend: " << (rf_test ? "✅ PASS" : "❌ FAIL") << std::endl;
+        all_passed = all_passed && rf_test;
+
+        // Test 4: Digital processing
+        bool digital_test = test_digital_processing();
+        std::cout << "  Digital processing: " << (digital_test ? "✅ PASS" : "❌ FAIL") << std::endl;
+        all_passed = all_passed && digital_test;
+
+        // Test 5: Antenna integrity
+        bool antenna_test = test_antenna_integrity();
+        std::cout << "  Antenna integrity: " << (antenna_test ? "✅ PASS" : "❌ FAIL") << std::endl;
+        all_passed = all_passed && antenna_test;
+
+        if (all_passed) {
+            std::cout << "✅ UWB diagnostics passed" << std::endl;
+        } else {
+            std::cout << "❌ UWB diagnostics failed" << std::endl;
+        }
+
+        log_uwb_event("Diagnostics completed", all_passed ? "PASS" : "FAIL");
+        return all_passed;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB RunDiagnostics failed: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool UWBManager::ResetToDefaults() {
     std::cout << "🔄 Resetting UWB to default configuration..." << std::endl;
-    // TODO: Reset all UWB parameters to defaults
-    std::cout << "✅ UWB reset to defaults" << std::endl;
-    return true;
+
+    try {
+        // Reset all UWB parameters to safe defaults
+        std::lock_guard<std::mutex> lock(config_mutex_);
+
+        // Channel and frequency settings
+        write_uwb_register(UWB_REG_CHANNEL, UWB_DEFAULT_CHANNEL);
+        write_uwb_register_16(UWB_REG_PREAMBLE_LENGTH, UWB_DEFAULT_PREAMBLE_LENGTH);
+
+        // Power settings
+        write_uwb_register(UWB_REG_TX_POWER, UWB_DEFAULT_TX_POWER);
+        write_uwb_register(UWB_REG_AGC_CTRL1, UWB_DEFAULT_RX_GAIN);
+
+        // Timing settings
+        write_uwb_register_32(UWB_REG_RX_TIMEOUT, UWB_DEFAULT_RX_TIMEOUT);
+        write_uwb_register_32(UWB_REG_MEASUREMENT_INTERVAL, UWB_DEFAULT_MEASUREMENT_INTERVAL);
+
+        // Antenna delays (typical values)
+        write_uwb_register_16(UWB_REG_TX_ANTENNA_DELAY, UWB_DEFAULT_TX_ANTENNA_DELAY);
+        write_uwb_register_16(UWB_REG_RX_ANTENNA_DELAY, UWB_DEFAULT_RX_ANTENNA_DELAY);
+
+        // Ranging mode
+        write_uwb_register(UWB_REG_RANGING_MODE, UWB_MODE_DS_TWR);
+
+        // Reset internal state to defaults
+        current_ranging_mode_ = UWBRangingMode::DS_TWR;
+        max_ranging_distance_m_ = 100.0;
+        position_accuracy_threshold_m_ = 0.1;
+        outlier_rejection_enabled_ = true;
+        update_rate_hz_ = 100;
+        measurement_interval_ms_ = 100;
+        tx_antenna_delay_ = UWB_DEFAULT_TX_ANTENNA_DELAY;
+        rx_antenna_delay_ = UWB_DEFAULT_RX_ANTENNA_DELAY;
+
+        // Reset filters and statistics
+        position_filter_.reset();
+        statistics_.reset();
+
+        std::cout << "✅ UWB reset to defaults completed" << std::endl;
+        log_uwb_event("Reset to defaults", "All parameters restored");
+        return true;
+
+    } catch (const std::exception& e) {
+        std::cerr << "❌ UWB ResetToDefaults failed: " << e.what() << std::endl;
+        return false;
+    }
 }
+
+uint8_t UWBManager::calculate_lna_gain(uint8_t gain_level) const {
+    // Convert digital gain to LNA gain settings (hardware specific)
+    return (gain_level >> 2) & 0x0F; // Use upper 4 bits for LNA
+}
+
+uint32_t UWBManager::calculate_interval_register_value(uint32_t interval_ms) const {
+    // Convert milliseconds to UWB timer ticks (typically 1.0256 µs per tick)
+    const double UWB_TIME_UNITS_PER_MS = 976.5625; // 1ms / 1.0256µs
+    return static_cast<uint32_t>(interval_ms * UWB_TIME_UNITS_PER_MS);
+}
+
+void UWBManager::configure_ranging_timing(UWBRangingMode mode) {
+    // Configure timing parameters based on ranging mode
+    switch (mode) {
+        case UWBRangingMode::DS_TWR:
+            // Double-sided TWR needs longer timeouts
+            write_uwb_register_16(UWB_REG_PREAMBLE_TIMEOUT, 1000);
+            write_uwb_register_32(UWB_REG_RX_TIMEOUT, 65000);
+            break;
+
+        case UWBRangingMode::SS_TWR:
+            // Single-sided TWR is faster
+            write_uwb_register_16(UWB_REG_PREAMBLE_TIMEOUT, 500);
+            write_uwb_register_32(UWB_REG_RX_TIMEOUT, 32000);
+            break;
+
+        case UWBRangingMode::TWR:
+            // Standard TWR
+            write_uwb_register_16(UWB_REG_PREAMBLE_TIMEOUT, 750);
+            write_uwb_register_32(UWB_REG_RX_TIMEOUT, 48000);
+            break;
+
+        case UWBRangingMode::TDOA:
+            // TDOA mode needs different timing
+            write_uwb_register_16(UWB_REG_PREAMBLE_TIMEOUT, 300);
+            write_uwb_register_32(UWB_REG_RX_TIMEOUT, 20000);
+            break;
+    }
+}
+
+uint32_t UWBManager::calculate_ranging_timeout(double max_distance_m) const {
+    // Calculate timeout based on maximum distance
+    // Time of flight for max distance * 2 (round trip) + processing overhead
+    const double SPEED_OF_LIGHT = 299792458.0; // m/s
+    const double OVERHEAD_FACTOR = 1.5; // 50% overhead for processing
+
+    double flight_time_s = (2.0 * max_distance_m / SPEED_OF_LIGHT) * OVERHEAD_FACTOR;
+    double flight_time_us = flight_time_s * 1000000.0;
+
+    // Convert to UWB timer units
+    return static_cast<uint32_t>(flight_time_us / 1.0256);
+}
+
+uint16_t UWBManager::calculate_preamble_timeout(double max_distance_m) const {
+    // Preamble timeout scales with distance (path loss considerations)
+    return static_cast<uint16_t>(500 + max_distance_m * 2.0);
+}
+
+void UWBManager::schedule_uwb_restart(const std::string& reason) {
+    // Schedule UWB component restart
+    log_uwb_event("Restart scheduled", reason);
+    restart_required_ = true;
+    restart_reason_ = reason;
+
+    // Notify main thread that restart is needed
+    restart_condition_.notify_one();
+}
+
+void UWBManager::log_uwb_event(const std::string& event, const std::string& details) const {
+    auto timestamp = std::chrono::steady_clock::now();
+    std::cout << "[UWB] " << event;
+    if (!details.empty()) {
+        std::cout << ": " << details;
+    }
+    std::cout << std::endl;
+}
+static const uint8_t UWB_DEFAULT_CHANNEL = 5;
+static const uint16_t UWB_DEFAULT_PREAMBLE_LENGTH = 128;
+static const uint8_t UWB_DEFAULT_TX_POWER = 0x1F1F1F1F;
+static const uint8_t UWB_DEFAULT_RX_GAIN = 32;
+static const uint32_t UWB_DEFAULT_RX_TIMEOUT = 65000;
+static const uint32_t UWB_DEFAULT_MEASUREMENT_INTERVAL = 97656; // ~100ms in UWB units
+static const uint16_t UWB_DEFAULT_TX_ANTENNA_DELAY = 16456;
+static const uint16_t UWB_DEFAULT_RX_ANTENNA_DELAY = 16456;
+
+static const double MAX_CRYSTAL_OFFSET_PPM = 20.0;
 uint64

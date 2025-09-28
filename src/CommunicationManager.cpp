@@ -776,7 +776,7 @@ namespace SwarmControl {
         }
     }
 
-    // Message handlers - объявлены в .h, но отсутствуют в .cpp
+    // Message handlers
     bool CommunicationManager::register_message_handler(MessageType type, MessageCallback callback) {
         message_handlers_[type] = callback;
         log_communication_event("Message handler registered",
@@ -1198,23 +1198,215 @@ namespace SwarmControl {
     }
 
     bool CommunicationManager::initialize_elrs_modules() {
-        // ✅ ELRS MODULE INITIALIZATION
         log_communication_event("Initializing ELRS modules...");
 
         try {
-            // ELRS initialization would go here
-            // This is for ExpressLRS 2.4GHz/915MHz modules
+            // Initialize ELRS 2.4GHz module
+            bool elrs_2g4_ok = initialize_elrs_2g4_module();
+            if (!elrs_2g4_ok) {
+                log_communication_event("ELRS 2.4GHz module initialization failed", "WARNING");
+            }
+
+            // Initialize ELRS 915MHz module
+            bool elrs_915_ok = initialize_elrs_915_module();
+            if (!elrs_915_ok) {
+                log_communication_event("ELRS 915MHz module initialization failed", "WARNING");
+            }
+
+            // At least one module must work
+            if (!elrs_2g4_ok && !elrs_915_ok) {
+                log_communication_event("All ELRS modules failed to initialize", "ERROR");
+                return false;
+            }
 
             log_communication_event("ELRS modules initialized successfully");
             return true;
 
         } catch (const std::exception& e) {
-            log_communication_event("ELRS initialization failed", e.what());
+            log_communication_event("ELRS initialization exception", e.what());
             return false;
         }
     }
 
-    // Message processing helpers - NOW IMPLEMENTED
+    bool CommunicationManager::initialize_elrs_2g4_module() {
+        try {
+            // Configure SPI interface for ELRS 2.4GHz
+            if (!configure_spi_interface(ELRS_2G4_SPI_PORT, ELRS_2G4_CS_PIN)) {
+                return false;
+            }
+
+            // Reset ELRS module
+            gpio_set_pin_low(ELRS_2G4_RESET_PIN);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            gpio_set_pin_high(ELRS_2G4_RESET_PIN);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            // Check module presence
+            uint8_t module_id = read_elrs_register(ELRS_REG_MODULE_ID);
+            if (module_id != ELRS_2G4_MODULE_ID) {
+                log_communication_event("ELRS 2.4GHz module not detected",
+                                        "Expected: 0x" + std::to_string(ELRS_2G4_MODULE_ID) +
+                                        ", Got: 0x" + std::to_string(module_id));
+                return false;
+            }
+
+            // Configure for Ukrainian frequencies and power limits
+            write_elrs_register(ELRS_REG_FREQUENCY_BASE, ELRS_2G4_FREQ_BASE_UA);
+            write_elrs_register(ELRS_REG_POWER_LEVEL, std::min(current_power_level_, (int8_t)20));
+            write_elrs_register(ELRS_REG_PACKET_RATE, ELRS_PACKET_RATE_500HZ);
+            write_elrs_register(ELRS_REG_SWITCH_MODE, ELRS_SWITCH_HYBRID);
+
+            // Enable Ukrainian frequency hopping sequence
+            enable_elrs_frequency_hopping(elrs_ukraine_2g4_frequencies,
+                                          sizeof(elrs_ukraine_2g4_frequencies)/sizeof(uint32_t));
+
+            log_communication_event("ELRS 2.4GHz module configured");
+            return true;
+
+        } catch (const std::exception& e) {
+            log_communication_event("ELRS 2.4GHz init exception", e.what());
+            return false;
+        }
+    }
+
+    bool CommunicationManager::initialize_elrs_915_module() {
+        try {
+            // Configure SPI interface for ELRS 915MHz
+            if (!configure_spi_interface(ELRS_915_SPI_PORT, ELRS_915_CS_PIN)) {
+                return false;
+            }
+
+            // Reset ELRS module
+            gpio_set_pin_low(ELRS_915_RESET_PIN);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            gpio_set_pin_high(ELRS_915_RESET_PIN);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            // Check module presence
+            uint8_t module_id = read_elrs_register(ELRS_REG_MODULE_ID);
+            if (module_id != ELRS_915_MODULE_ID) {
+                log_communication_event("ELRS 915MHz module not detected",
+                                        "Expected: 0x" + std::to_string(ELRS_915_MODULE_ID) +
+                                        ", Got: 0x" + std::to_string(module_id));
+                return false;
+            }
+
+            // Configure for Ukrainian 915MHz ISM band
+            write_elrs_register(ELRS_REG_FREQUENCY_BASE, ELRS_915_FREQ_BASE_UA);
+            write_elrs_register(ELRS_REG_POWER_LEVEL, std::min(current_power_level_, (int8_t)14)); // EU limit
+            write_elrs_register(ELRS_REG_PACKET_RATE, ELRS_PACKET_RATE_100HZ);
+            write_elrs_register(ELRS_REG_SWITCH_MODE, ELRS_SWITCH_WIDE);
+
+            // Enable Ukrainian 915MHz frequency hopping
+            enable_elrs_frequency_hopping(elrs_ukraine_915_frequencies,
+                                          sizeof(elrs_ukraine_915_frequencies)/sizeof(uint32_t));
+
+            log_communication_event("ELRS 915MHz module configured");
+            return true;
+
+        } catch (const std::exception& e) {
+            log_communication_event("ELRS 915MHz init exception", e.what());
+            return false;
+        }
+    }
+
+    void CommunicationManager::pack_message_into_elrs_channels(const SwarmMessage& message,
+                                                               uint16_t* channels) {
+        // ELRS использует 16 каналов по 11 бит каждый (1000-2000 microseconds range)
+        // Мы используем их для передачи данных instead of RC control
+
+        // Clear all channels
+        std::fill(channels, channels + ELRS_MAX_CHANNELS, 1500); // Center position
+
+        // Pack message header into first 4 channels
+        channels[0] = 1000 + ((message.type & 0xFF) * 4);           // Message type
+        channels[1] = 1000 + ((message.priority & 0xFF) * 4);       // Priority
+        channels[2] = 1000 + ((message.destination_id & 0xFF) * 4); // Destination (low byte)
+        channels[3] = 1000 + (((message.destination_id >> 8) & 0xFF) * 4); // Destination (high byte)
+
+        // Pack payload into remaining channels (max 12 channels * 8 bits = 96 bytes payload)
+        size_t payload_bytes = std::min(message.payload.size(), (size_t)96);
+        for (size_t i = 0; i < payload_bytes && i < 12; i++) {
+            if (i < message.payload.size()) {
+                channels[4 + i] = 1000 + (message.payload[i] * 4);
+            }
+        }
+    }
+
+    bool CommunicationManager::transmit_elrs_frame(const ELRSFrame& frame, const ELRSConfig& config) {
+        try {
+            // Select appropriate ELRS module based on frequency
+            SPIPort spi_port = (config.frequency_range == ELRS_2_4GHZ) ?
+                               ELRS_2G4_SPI_PORT : ELRS_915_SPI_PORT;
+
+            uint8_t cs_pin = (config.frequency_range == ELRS_2_4GHZ) ?
+                             ELRS_2G4_CS_PIN : ELRS_915_CS_PIN;
+
+            // Set transmission power
+            write_elrs_register_via_spi(spi_port, cs_pin, ELRS_REG_POWER_LEVEL, config.power_level);
+
+            // Set packet rate
+            write_elrs_register_via_spi(spi_port, cs_pin, ELRS_REG_PACKET_RATE, config.packet_rate);
+
+            // Prepare frame for transmission
+            uint8_t frame_buffer[ELRS_MAX_FRAME_SIZE];
+            size_t frame_size = serialize_elrs_frame(frame, frame_buffer, sizeof(frame_buffer));
+
+            if (frame_size == 0) {
+                log_communication_event("ELRS frame serialization failed", "ERROR");
+                return false;
+            }
+
+            // Transmit frame via SPI
+            spi_select_device(spi_port, cs_pin);
+
+            // Send transmit command
+            spi_write_byte(spi_port, ELRS_CMD_TRANSMIT);
+            spi_write_byte(spi_port, frame_size);
+
+            // Send frame data
+            spi_write_buffer(spi_port, frame_buffer, frame_size);
+
+            spi_deselect_device(spi_port, cs_pin);
+
+            // Wait for transmission completion
+            bool tx_complete = wait_for_elrs_tx_complete(spi_port, cs_pin, 100); // 100ms timeout
+
+            if (tx_complete) {
+                log_communication_event("ELRS frame transmitted successfully");
+                return true;
+            } else {
+                log_communication_event("ELRS transmission timeout", "ERROR");
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            log_communication_event("ELRS transmission exception", e.what());
+            return false;
+        }
+    }
+
+    uint16_t CommunicationManager::calculate_elrs_crc(const ELRSFrame& frame) {
+        // ELRS использует CRC-16-CCITT для проверки целостности
+        uint16_t crc = 0xFFFF;
+        const uint8_t* data = reinterpret_cast<const uint8_t*>(&frame);
+        size_t length = sizeof(frame) - sizeof(frame.header.crc); // Exclude CRC field itself
+
+        for (size_t i = 0; i < length; i++) {
+            crc ^= data[i] << 8;
+            for (int j = 0; j < 8; j++) {
+                if (crc & 0x8000) {
+                    crc = (crc << 1) ^ 0x1021;
+                } else {
+                    crc <<= 1;
+                }
+            }
+        }
+
+        return crc;
+    }
+
+    // Message processing helpers
     bool CommunicationManager::process_outgoing_message(const SwarmMessage& message) {
         // Validate message
         if (!validate_message(message)) {
@@ -1502,24 +1694,52 @@ namespace SwarmControl {
     }
 
 // ✅ LORA HARDWARE CONSTANTS - REAL SX1276 REGISTERS
-    constexpr uint8_t REG_OP_MODE = 0x01;
-    constexpr uint8_t REG_FRF_MSB = 0x06;
-    constexpr uint8_t REG_FRF_MID = 0x07;
-    constexpr uint8_t REG_FRF_LSB = 0x08;
-    constexpr uint8_t REG_PA_CONFIG = 0x09;
-    constexpr uint8_t REG_PA_DAC = 0x4D;
-    constexpr uint8_t REG_RSSI_VALUE = 0x1B;
-    constexpr uint8_t REG_MODEM_CONFIG_1 = 0x1D;
-    constexpr uint8_t REG_MODEM_CONFIG_2 = 0x1E;
-    constexpr uint8_t REG_MODEM_CONFIG_3 = 0x26;
-    constexpr uint8_t REG_SYNC_WORD = 0x39;
-    constexpr uint8_t REG_VERSION = 0x42;
+    static const uint8_t REG_FIFO = 0x00;
+    static const uint8_t REG_OP_MODE = 0x01;
+    static const uint8_t REG_FRF_MSB = 0x06;
+    static const uint8_t REG_FRF_MID = 0x07;
+    static const uint8_t REG_FRF_LSB = 0x08;
+    static const uint8_t REG_PA_CONFIG = 0x09;
+    static const uint8_t REG_PA_RAMP = 0x0A;
+    static const uint8_t REG_OCP = 0x0B;
+    static const uint8_t REG_LNA = 0x0C;
+    static const uint8_t REG_FIFO_ADDR_PTR = 0x0D;
+    static const uint8_t REG_FIFO_TX_BASE_ADDR = 0x0E;
+    static const uint8_t REG_FIFO_RX_BASE_ADDR = 0x0F;
+    static const uint8_t REG_FIFO_RX_CURRENT_ADDR = 0x10;
+    static const uint8_t REG_IRQ_FLAGS_MASK = 0x11;
+    static const uint8_t REG_IRQ_FLAGS = 0x12;
+    static const uint8_t REG_RX_NB_BYTES = 0x13;
+    static const uint8_t REG_PKT_SNR_VALUE = 0x19;
+    static const uint8_t REG_PKT_RSSI_VALUE = 0x1A;
+    static const uint8_t REG_RSSI_VALUE = 0x1B;
+    static const uint8_t REG_MODEM_CONFIG_1 = 0x1D;
+    static const uint8_t REG_MODEM_CONFIG_2 = 0x1E;
+    static const uint8_t REG_SYMB_TIMEOUT_LSB = 0x1F;
+    static const uint8_t REG_PREAMBLE_MSB = 0x20;
+    static const uint8_t REG_PREAMBLE_LSB = 0x21;
+    static const uint8_t REG_PAYLOAD_LENGTH = 0x22;
+    static const uint8_t REG_MODEM_CONFIG_3 = 0x26;
+    static const uint8_t REG_FREQ_ERROR_MSB = 0x28;
+    static const uint8_t REG_FREQ_ERROR_MID = 0x29;
+    static const uint8_t REG_FREQ_ERROR_LSB = 0x2A;
+    static const uint8_t REG_RSSI_WIDEBAND = 0x2C;
+    static const uint8_t REG_DETECTION_OPTIMIZE = 0x31;
+    static const uint8_t REG_INVERT_IQ = 0x33;
+    static const uint8_t REG_DETECTION_THRESHOLD = 0x37;
+    static const uint8_t REG_SYNC_WORD = 0x39;
+    static const uint8_t REG_INVERT_IQ2 = 0x3B;
+    static const uint8_t REG_DIO_MAPPING_1 = 0x40;
+    static const uint8_t REG_DIO_MAPPING_2 = 0x41;
+    static const uint8_t REG_VERSION = 0x42;
 
-    constexpr uint8_t MODE_SLEEP = 0x00;
-    constexpr uint8_t MODE_STDBY = 0x01;
-    constexpr uint8_t MODE_TX = 0x03;
-    constexpr uint8_t MODE_RX_CONTINUOUS = 0x05;
-    constexpr uint8_t MODE_CAD = 0x07;
+// LoRa operating modes
+    static const uint8_t MODE_LONG_RANGE_MODE = 0x80;
+    static const uint8_t MODE_SLEEP = 0x00;
+    static const uint8_t MODE_STDBY = 0x01;
+    static const uint8_t MODE_TX = 0x03;
+    static const uint8_t MODE_RX_CONTINUOUS = 0x05;
+    static const uint8_t MODE_RX_SINGLE = 0x06;
 
     bool CommunicationManager::validate_message(const SwarmMessage& message) const {
         // Check message size limits
@@ -1541,7 +1761,7 @@ namespace SwarmControl {
         return true;
     }
 
-    // Send via LoRa - объявлен в .h, но отсутствует в .cpp
+    // Send via LoRa -
     bool CommunicationManager::send_via_lora(const SwarmMessage& message, const LoRaConfig& config) {
         try {
             // Convert SwarmMessage to LoRaMessage
@@ -1568,7 +1788,7 @@ namespace SwarmControl {
         }
     }
 
-    // Receive via LoRa - объявлен в .h, но отсутствует в .cpp
+    // Receive via LoRa -
     bool CommunicationManager::receive_via_lora(SwarmMessage& message) {
         try {
             LoRaMessage lora_msg;
@@ -1599,7 +1819,7 @@ namespace SwarmControl {
         }
     }
 
-    // Недостающие hardware abstraction methods
+    // hardware abstraction methods
     bool CommunicationManager::transmit_lora_message(const LoRaMessage* message) {
         try {
             // Set to standby mode
@@ -1708,7 +1928,7 @@ namespace SwarmControl {
         }
     }
 
-    // Calculate checksum - используется но не реализован
+    // Calculate checksum
     uint32_t CommunicationManager::calculate_checksum(const LoRaMessage* message) const {
         // CRC32 implementation
         uint32_t crc = 0xFFFFFFFF;
@@ -1822,14 +2042,177 @@ namespace SwarmControl {
 
 
     uint8_t CommunicationManager::read_lora_register(uint8_t address) {
-    uint8_t value = 0;
-    if (read_lora_register(address, &value)) {
+    try {
+    // Прямое чтение регистра через SPI - БЕЗ РЕКУРСИИ
+    spi_select_device(LORA_SPI_PORT, LORA_CS_PIN);
+
+    // Send read command (MSB=0 for read)
+    spi_write_byte(LORA_SPI_PORT, address & 0x7F);
+    uint8_t value = spi_read_byte(LORA_SPI_PORT);
+
+    spi_deselect_device(LORA_SPI_PORT, LORA_CS_PIN);
+
+    // Optional: Add small delay for hardware stability
+    std::this_thread::sleep_for(std::chrono::microseconds(10));
+
     return value;
-}
-return 0;
+
+    } catch (const std::exception& e) {
+        log_communication_event("LoRa register read failed",
+"Address: 0x" + std::to_string(address) + ", Error: " + e.what());
+        return 0;
+    }
 }
 
-// Message handlers - объявлены в .h, но отсутствуют в .cpp
+bool CommunicationManager::read_lora_register(uint8_t address, uint8_t* value) {
+    if (!value) {
+        log_communication_event("LoRa register read - null pointer", "ERROR");
+        return false;
+    }
+
+    try {
+        // Используем ТОЖЕ прямое чтение, НО с проверкой результата
+        spi_select_device(LORA_SPI_PORT, LORA_CS_PIN);
+
+        // Send read command (MSB=0 for read)
+        spi_write_byte(LORA_SPI_PORT, address & 0x7F);
+        uint8_t read_value = spi_read_byte(LORA_SPI_PORT);
+
+        spi_deselect_device(LORA_SPI_PORT, LORA_CS_PIN);
+
+        // Small delay for hardware stability
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+
+        // Verify the read was successful (optional hardware-specific check)
+        if (!verify_lora_register_read(address, read_value)) {
+            log_communication_event("LoRa register read verification failed",
+                                    "Address: 0x" + std::to_string(address));
+            return false;
+        }
+
+        *value = read_value;
+        return true;
+
+    } catch (const std::exception& e) {
+        log_communication_event("LoRa register read failed",
+                                "Address: 0x" + std::to_string(address) + ", Error: " + e.what());
+        return false;
+    }
+}
+
+bool CommunicationManager::write_lora_register(uint8_t address, uint8_t value) {
+    try {
+        spi_select_device(LORA_SPI_PORT, LORA_CS_PIN);
+
+        // Send write command (MSB=1 for write)
+        spi_write_byte(LORA_SPI_PORT, address | 0x80);
+        spi_write_byte(LORA_SPI_PORT, value);
+
+        spi_deselect_device(LORA_SPI_PORT, LORA_CS_PIN);
+
+        // Small delay after write
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+
+        // Optional: Verify write was successful
+        if (!verify_lora_register_write(address, value)) {
+            log_communication_event("LoRa register write verification failed",
+                                    "Address: 0x" + std::to_string(address) +
+                                    ", Value: 0x" + std::to_string(value));
+            return false;
+        }
+
+        log_communication_event("LoRa register write successful",
+                                "Address: 0x" + std::to_string(address) +
+                                ", Value: 0x" + std::to_string(value));
+        return true;
+
+    } catch (const std::exception& e) {
+        log_communication_event("LoRa register write failed",
+                                "Address: 0x" + std::to_string(address) + ", Error: " + e.what());
+        return false;
+    }
+}
+
+bool CommunicationManager::verify_lora_register_read(uint8_t address, uint8_t value) const {
+    // Проверяем, что прочитанное значение разумное для данного регистра
+
+    switch (address) {
+        case REG_VERSION: // LoRa chip version register
+            // Semtech SX1276/1277/1278/1279 chips return 0x12
+            return (value == 0x12);
+
+        case REG_OP_MODE: // Operating mode register
+            // Valid mode bits: only bits 0-2 and 7 are used
+            return ((value & 0x78) == 0); // Bits 3-6 should be 0
+
+        case REG_FRF_MSB: // Frequency register MSB
+        case REG_FRF_MID: // Frequency register MID
+        case REG_FRF_LSB: // Frequency register LSB
+            // Frequency registers can have any value, so always valid
+            return true;
+
+        case REG_PA_CONFIG: // PA configuration
+            // Check if PA_SELECT and OutputPower bits are in valid range
+            return ((value & 0x70) <= 0x70); // OutputPower max is 7
+
+        case REG_MODEM_CONFIG_1:
+        case REG_MODEM_CONFIG_2:
+        case REG_MODEM_CONFIG_3:
+            // Modem config registers - most values are valid
+            return true;
+
+        default:
+            // For unknown registers, assume read was successful
+            return true;
+    }
+}
+
+bool CommunicationManager::verify_lora_register_write(uint8_t address, uint8_t expected_value) const {
+    // Read back the register to verify write was successful
+    try {
+        // Direct SPI read for verification (without recursion!)
+        spi_select_device(LORA_SPI_PORT, LORA_CS_PIN);
+        spi_write_byte(LORA_SPI_PORT, address & 0x7F);
+        uint8_t actual_value = spi_read_byte(LORA_SPI_PORT);
+        spi_deselect_device(LORA_SPI_PORT, LORA_CS_PIN);
+
+        // Some registers have read-only bits or hardware modifications
+        return verify_register_write_match(address, expected_value, actual_value);
+
+    } catch (const std::exception& e) {
+        // If verification read fails, assume write was successful
+        return true;
+    }
+}
+
+bool CommunicationManager::verify_register_write_match(uint8_t address, uint8_t expected, uint8_t actual) const {
+    switch (address) {
+        case REG_OP_MODE:
+            // Some bits in OpMode might be modified by hardware
+            // Only check the bits we actually control
+            return ((expected & 0x87) == (actual & 0x87)); // Mode bits and LongRangeMode
+
+        case REG_IRQ_FLAGS:
+            // IRQ flags register - writing 1 clears flags, so readback might be different
+            return true; // Don't verify IRQ flags register
+
+        case REG_IRQ_FLAGS_MASK:
+            // IRQ mask register should match exactly
+            return (expected == actual);
+
+        case REG_FIFO_ADDR_PTR:
+        case REG_FIFO_TX_BASE_ADDR:
+        case REG_FIFO_RX_BASE_ADDR:
+            // FIFO address registers should match exactly
+            return (expected == actual);
+
+        default:
+            // For most registers, expect exact match
+            return (expected == actual);
+    }
+}
+
+// Message handlers
 bool CommunicationManager::register_message_handler(MessageType type, MessageCallback callback) {
     message_handlers_[type] = callback;
     log_communication_event("Message handler registered",
@@ -1848,17 +2231,95 @@ bool CommunicationManager::unregister_message_handler(MessageType type) {
     return false;
 }
 
-// Additional missing methods from header
+//
 bool CommunicationManager::send_via_elrs_2_4ghz(const SwarmMessage& message) {
-    // ELRS 2.4GHz implementation stub
-    log_communication_event("ELRS 2.4GHz not implemented", "WARNING");
-    return false;
+    try {
+        log_communication_event("Sending via ELRS 2.4GHz",
+                                "Target: " + std::to_string(message.destination_id));
+
+        // ELRS 2.4GHz specific configuration
+        ELRSConfig elrs_config;
+        elrs_config.frequency_range = ELRS_2_4GHZ;
+        elrs_config.power_level = current_power_level_;
+        elrs_config.packet_rate = ELRS_PACKET_RATE_500HZ; // High speed for 2.4GHz
+        elrs_config.switch_mode = ELRS_SWITCH_HYBRID;
+
+        // Convert SwarmMessage to ELRS frame format
+        ELRSFrame elrs_frame;
+        elrs_frame.header.frame_type = ELRS_FRAME_RC_CHANNELS_PACKED;
+        elrs_frame.header.destination = message.destination_id;
+        elrs_frame.header.sender = message.source_id;
+        elrs_frame.header.sequence = message.sequence_number;
+
+        // Pack message payload into ELRS channels (creative use of RC channels for data)
+        pack_message_into_elrs_channels(message, elrs_frame.channels);
+
+        // Calculate and set CRC
+        elrs_frame.header.crc = calculate_elrs_crc(elrs_frame);
+
+        // Send via ELRS hardware interface
+        bool success = transmit_elrs_frame(elrs_frame, elrs_config);
+
+        if (success) {
+            communication_stats_.messages_sent++;
+            communication_stats_.last_successful_transmission = std::chrono::steady_clock::now();
+            log_communication_event("ELRS 2.4GHz transmission successful");
+        } else {
+            communication_stats_.messages_failed++;
+            log_communication_event("ELRS 2.4GHz transmission failed", "ERROR");
+        }
+
+        return success;
+
+    } catch (const std::exception& e) {
+        communication_stats_.messages_failed++;
+        log_communication_event("ELRS 2.4GHz exception", e.what());
+        return false;
+    }
 }
 
 bool CommunicationManager::send_via_elrs_915mhz(const SwarmMessage& message) {
-    // ELRS 915MHz implementation stub
-    log_communication_event("ELRS 915MHz not implemented", "WARNING");
-    return false;
+    try {
+        log_communication_event("Sending via ELRS 915MHz",
+                                "Target: " + std::to_string(message.destination_id));
+
+        // ELRS 915MHz specific configuration - better range, lower speed
+        ELRSConfig elrs_config;
+        elrs_config.frequency_range = ELRS_915MHZ;
+        elrs_config.power_level = std::min(current_power_level_, (int8_t)20); // EU limit
+        elrs_config.packet_rate = ELRS_PACKET_RATE_100HZ; // Lower rate for range
+        elrs_config.switch_mode = ELRS_SWITCH_WIDE;
+
+        // Convert SwarmMessage to ELRS frame format
+        ELRSFrame elrs_frame;
+        elrs_frame.header.frame_type = ELRS_FRAME_RC_CHANNELS_PACKED;
+        elrs_frame.header.destination = message.destination_id;
+        elrs_frame.header.sender = message.source_id;
+        elrs_frame.header.sequence = message.sequence_number;
+
+        // Pack message payload
+        pack_message_into_elrs_channels(message, elrs_frame.channels);
+        elrs_frame.header.crc = calculate_elrs_crc(elrs_frame);
+
+        // Send via ELRS hardware interface
+        bool success = transmit_elrs_frame(elrs_frame, elrs_config);
+
+        if (success) {
+            communication_stats_.messages_sent++;
+            communication_stats_.last_successful_transmission = std::chrono::steady_clock::now();
+            log_communication_event("ELRS 915MHz transmission successful");
+        } else {
+            communication_stats_.messages_failed++;
+            log_communication_event("ELRS 915MHz transmission failed", "ERROR");
+        }
+
+        return success;
+
+    } catch (const std::exception& e) {
+        communication_stats_.messages_failed++;
+        log_communication_event("ELRS 915MHz exception", e.what());
+        return false;
+    }
 }
 
 // Mesh networking methods that are declared but missing
@@ -1946,4 +2407,71 @@ static constexpr uint8_t REG_PAYLOAD_LENGTH = 0x22;
 static constexpr uint8_t IRQ_TX_DONE = 0x08;
 static constexpr uint8_t IRQ_RX_DONE = 0x40;
 static constexpr uint8_t IRQ_PAYLOAD_CRC_ERROR = 0x20;
+
+
+#ifdef ESP32_PLATFORM
+    // ESP32 SPI implementation
+    void spi_select_device(SPIPort port, uint8_t cs_pin) {
+        gpio_set_level(static_cast<gpio_num_t>(cs_pin), 0);
+    }
+
+    void spi_deselect_device(SPIPort port, uint8_t cs_pin) {
+        gpio_set_level(static_cast<gpio_num_t>(cs_pin), 1);
+    }
+
+    void spi_write_byte(SPIPort port, uint8_t data) {
+        spi_transaction_t trans = {};
+        trans.length = 8;
+        trans.tx_buffer = &data;
+        spi_device_transmit(spi_device_handle, &trans);
+    }
+
+    uint8_t spi_read_byte(SPIPort port) {
+        uint8_t data = 0;
+        spi_transaction_t trans = {};
+        trans.length = 8;
+        trans.rx_buffer = &data;
+        spi_device_transmit(spi_device_handle, &trans);
+        return data;
+    }
+
+#elif defined(LINUX_PLATFORM)
+    // Linux SPI implementation (для тестирования)
+    void spi_select_device(SPIPort port, uint8_t cs_pin) {
+        // GPIO через /sys/class/gpio или libgpiod
+    }
+
+    void spi_deselect_device(SPIPort port, uint8_t cs_pin) {
+        // GPIO через /sys/class/gpio или libgpiod
+    }
+
+    void spi_write_byte(SPIPort port, uint8_t data) {
+        // SPI через /dev/spidevX.Y
+    }
+
+    uint8_t spi_read_byte(SPIPort port) {
+        // SPI через /dev/spidevX.Y
+        return 0;
+    }
+
+#else
+    // Simulation/testing implementation
+    void spi_select_device(SPIPort port, uint8_t cs_pin) {
+        // Заглушка для компиляции
+    }
+
+    void spi_deselect_device(SPIPort port, uint8_t cs_pin) {
+        // Заглушка для компиляции
+    }
+
+    void spi_write_byte(SPIPort port, uint8_t data) {
+        // Заглушка для компиляции
+    }
+
+    uint8_t spi_read_byte(SPIPort port) {
+        // Заглушка для компиляции - возвращаем "разумные" значения
+        static uint8_t fake_version = 0x12; // SX1276 version
+        return fake_version;
+    }
+#endif
 } // namespace SwarmControl

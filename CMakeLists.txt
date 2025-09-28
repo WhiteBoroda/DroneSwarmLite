@@ -88,6 +88,10 @@ set(SWARM_CONTROL_HEADERS
         firmware/drone_firmware/include/UWBManager_ESP32.h
         firmware/drone_firmware/src/UWBManager_ESP32.cpp
         src/AutonomousDroneAgent.cpp
+        include/UWBUtilities.h
+        include/FormationController.h
+        include/PowerManager.h
+        include/SafetyManager.h
 )
 
 # Create main executable

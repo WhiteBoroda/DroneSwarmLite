@@ -70,6 +70,30 @@ namespace SwarmControl {
         SwarmMessage() : type(MessageType::HEARTBEAT), source_id(0), destination_id(0xFFFF),
                          sequence_number(0), timestamp_ms(0), priority(128), retry_count(0), encrypted(false) {}
     };
+    struct ELRSConfig {
+        enum FrequencyRange { ELRS_2_4GHZ, ELRS_915MHZ } frequency_range;
+        int8_t power_level;
+        uint16_t packet_rate;
+        enum SwitchMode { ELRS_SWITCH_HYBRID, ELRS_SWITCH_WIDE } switch_mode;
+    };
+
+    struct ELRSFrame {
+        struct {
+            uint8_t frame_type;
+            DroneID destination;
+            DroneID sender;
+            uint16_t sequence;
+            uint16_t crc;
+        } header;
+        uint16_t channels[16]; // ELRS supports up to 16 channels
+    };
+
+// ELRS constants
+    static const uint8_t ELRS_FRAME_RC_CHANNELS_PACKED = 0x16;
+    static const uint8_t ELRS_PACKET_RATE_500HZ = 0;
+    static const uint8_t ELRS_PACKET_RATE_100HZ = 4;
+    static const uint8_t ELRS_MAX_CHANNELS = 16;
+    static const size_t ELRS_MAX_FRAME_SIZE = 64;
 
 // LoRa message structure for hardware communication
     struct LoRaMessage {
@@ -387,6 +411,32 @@ namespace SwarmControl {
         // Utility
         void log_communication_event(const std::string& event, const std::string& details = "");
         uint32_t get_current_time_ms() const;
+
+        bool initialize_elrs_2g4_module();
+        bool initialize_elrs_915_module();
+        void pack_message_into_elrs_channels(const SwarmMessage& message, uint16_t* channels);
+        bool transmit_elrs_frame(const ELRSFrame& frame, const ELRSConfig& config);
+        uint16_t calculate_elrs_crc(const ELRSFrame& frame);
+
+        // LoRa register access (fixed circular dependency)
+        uint8_t read_lora_register_direct(uint8_t address);
+
+        // ELRS configuration methods (add to public section)
+        bool enable_elrs(bool enabled);
+        bool set_elrs_2g4_power(int8_t power_dbm);
+        bool set_elrs_915_power(int8_t power_dbm);
+        bool set_elrs_2g4_packet_rate(uint16_t rate_hz);
+        bool set_elrs_915_packet_rate(uint16_t rate_hz);
+
+        // Enhanced mesh networking methods (add to public section)
+        bool set_mesh_max_hops(uint8_t max_hops);
+        bool set_mesh_discovery_interval(uint32_t interval_ms);
+        bool set_mesh_routing_algorithm(const std::string& algorithm);
+
+        // Additional power and timing methods (add to public section)
+        bool set_rssi_threshold(double threshold_dbm);
+        bool enable_adaptive_power(bool enabled);
+
     };
 
 } // namespace SwarmControl

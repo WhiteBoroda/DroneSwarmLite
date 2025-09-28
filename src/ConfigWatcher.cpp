@@ -551,20 +551,446 @@ namespace SwarmSystem {
     }
 
     bool ConfigWatcher::applyConfigChange(const ConfigChange& change) {
-        // Пробуем обработчик секции сначала
-        auto handler_it = section_handlers_.find(change.section);
-        if (handler_it != section_handlers_.end()) {
-            std::string section_key = change.key.substr(change.section.length() + 1);
-            return handler_it->second->ApplyConfigChange(section_key, change.new_value);
+        try {
+            // Apply configuration changes to real components based on section
+
+            if (change.section == "lora") {
+                return applyLoRaConfigChange(change);
+            } else if (change.section == "elrs") {
+                return applyELRSConfigChange(change);
+            } else if (change.section == "uwb") {
+                return applyUWBConfigChange(change);
+            } else if (change.section == "mesh") {
+                return applyMeshConfigChange(change);
+            } else if (change.section == "formation") {
+                return applyFormationConfigChange(change);
+            } else if (change.section == "power") {
+                return applyPowerConfigChange(change);
+            } else if (change.section == "safety") {
+                return applySafetyConfigChange(change);
+            } else {
+                std::cerr << "⚠️ Unknown configuration section: " << change.section << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Exception in applyConfigChange: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool ConfigWatcher::applyLoRaConfigChange(const ConfigChange& change) {
+        if (!communication_manager_) {
+            std::cerr << "❌ CommunicationManager not available for LoRa config change" << std::endl;
+            return false;
         }
 
-        // Глобальный callback как fallback
-        if (global_change_callback_) {
-            return global_change_callback_(change.section, change.key, change.old_value, change.new_value);
+        try {
+            // Реальные вызовы CommunicationManager методов
+            if (change.key == "lora.power_levels.max_power") {
+                int8_t max_power = std::stoi(change.new_value);
+                return communication_manager_->set_max_power_level(max_power);
+
+            } else if (change.key == "lora.power_levels.min_power") {
+                int8_t min_power = std::stoi(change.new_value);
+                return communication_manager_->set_min_power_level(min_power);
+
+            } else if (change.key == "lora.frequency_hopping.enabled") {
+                bool enabled = (change.new_value == "true");
+                return communication_manager_->enable_frequency_hopping(enabled);
+
+            } else if (change.key == "lora.frequency_hopping.interval_ms") {
+                uint32_t interval = std::stoul(change.new_value);
+                return communication_manager_->set_frequency_hop_interval(interval);
+
+            } else if (change.key == "lora.frequency_list") {
+                // Parse frequency list from YAML
+                std::vector<uint32_t> frequencies = parseFrequencyList(change.new_value);
+                return communication_manager_->update_frequency_list(frequencies);
+
+            } else if (change.key == "lora.adaptive_power.enabled") {
+                bool enabled = (change.new_value == "true");
+                return communication_manager_->enable_adaptive_power(enabled);
+
+            } else if (change.key == "lora.adaptive_power.rssi_threshold") {
+                double threshold = std::stod(change.new_value);
+                return communication_manager_->set_rssi_threshold(threshold);
+
+            } else if (change.key == "lora.timeouts.communication_timeout_ms") {
+                uint32_t timeout = std::stoul(change.new_value);
+                return communication_manager_->set_communication_timeout(timeout);
+
+            } else if (change.key == "lora.timeouts.heartbeat_interval_ms") {
+                uint32_t interval = std::stoul(change.new_value);
+                return communication_manager_->set_heartbeat_interval(interval);
+
+            } else if (change.key == "lora.interference.threshold_dbm") {
+                double threshold = std::stod(change.new_value);
+                return communication_manager_->set_interference_threshold(threshold);
+
+            } else {
+                std::cerr << "⚠️ Unknown LoRa config key: " << change.key << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ LoRa config change failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool ConfigWatcher::applyELRSConfigChange(const ConfigChange& change) {
+        if (!communication_manager_) {
+            std::cerr << "❌ CommunicationManager not available for ELRS config change" << std::endl;
+            return false;
         }
 
-        std::cout << "⚠️ Нет обработчика для секции конфигурации: " << change.section << std::endl;
-        return false;
+        try {
+            // ELRS specific configuration changes
+            if (change.key == "elrs.enabled") {
+                bool enabled = (change.new_value == "true");
+                return communication_manager_->enable_elrs(enabled);
+
+            } else if (change.key == "elrs.power_2g4") {
+                int8_t power = std::stoi(change.new_value);
+                return communication_manager_->set_elrs_2g4_power(power);
+
+            } else if (change.key == "elrs.power_915") {
+                int8_t power = std::stoi(change.new_value);
+                return communication_manager_->set_elrs_915_power(power);
+
+            } else if (change.key == "elrs.packet_rate_2g4") {
+                uint16_t rate = std::stoul(change.new_value);
+                return communication_manager_->set_elrs_2g4_packet_rate(rate);
+
+            } else if (change.key == "elrs.packet_rate_915") {
+                uint16_t rate = std::stoul(change.new_value);
+                return communication_manager_->set_elrs_915_packet_rate(rate);
+
+            } else {
+                std::cerr << "⚠️ Unknown ELRS config key: " << change.key << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ ELRS config change failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool ConfigWatcher::applyUWBConfigChange(const ConfigChange& change) {
+        if (!uwb_manager_) {
+            std::cerr << "❌ UWBManager not available for UWB config change" << std::endl;
+            return false;
+        }
+
+        try {
+            // Реальные вызовы UWBManager методов
+            if (change.key == "uwb.tx_power_dbm") {
+                int8_t power = std::stoi(change.new_value);
+                return uwb_manager_->SetTxPower(power);
+
+            } else if (change.key == "uwb.rx_gain") {
+                uint8_t gain = std::stoul(change.new_value);
+                return uwb_manager_->SetRxGain(gain);
+
+            } else if (change.key == "uwb.update_rate_hz") {
+                uint16_t rate = std::stoul(change.new_value);
+                return uwb_manager_->SetUpdateRate(rate);
+
+            } else if (change.key == "uwb.measurement_interval_ms") {
+                uint32_t interval = std::stoul(change.new_value);
+                return uwb_manager_->SetMeasurementInterval(interval);
+
+            } else if (change.key == "uwb.ranging_mode") {
+                UWBRangingMode mode = parseRangingMode(change.new_value);
+                return uwb_manager_->SetRangingMode(mode);
+
+            } else if (change.key == "uwb.max_ranging_distance_m") {
+                double distance = std::stod(change.new_value);
+                return uwb_manager_->SetMaxRangingDistance(distance);
+
+            } else if (change.key == "uwb.accuracy_threshold_m") {
+                double threshold = std::stod(change.new_value);
+                return uwb_manager_->SetPositionAccuracyThreshold(threshold);
+
+            } else if (change.key == "uwb.outlier_rejection_enabled") {
+                bool enabled = (change.new_value == "true");
+                return uwb_manager_->EnableOutlierRejection(enabled);
+
+            } else if (change.key == "uwb.channel") {
+                uint8_t channel = std::stoul(change.new_value);
+                return uwb_manager_->SetChannel(channel);
+
+            } else if (change.key == "uwb.preamble_length") {
+                uint16_t length = std::stoul(change.new_value);
+                return uwb_manager_->SetPreambleLength(length);
+
+            } else {
+                std::cerr << "⚠️ Unknown UWB config key: " << change.key << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ UWB config change failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool ConfigWatcher::applyMeshConfigChange(const ConfigChange& change) {
+        if (!communication_manager_) {
+            std::cerr << "❌ CommunicationManager not available for mesh config change" << std::endl;
+            return false;
+        }
+
+        try {
+            // Mesh networking configuration changes
+            if (change.key == "mesh.enabled") {
+                bool enabled = (change.new_value == "true");
+                return communication_manager_->enable_mesh_networking(enabled);
+
+            } else if (change.key == "mesh.max_hops") {
+                uint8_t hops = std::stoul(change.new_value);
+                return communication_manager_->set_mesh_max_hops(hops);
+
+            } else if (change.key == "mesh.discovery_interval_ms") {
+                uint32_t interval = std::stoul(change.new_value);
+                return communication_manager_->set_mesh_discovery_interval(interval);
+
+            } else if (change.key == "mesh.routing_algorithm") {
+                std::string algorithm = change.new_value;
+                return communication_manager_->set_mesh_routing_algorithm(algorithm);
+
+            } else {
+                std::cerr << "⚠️ Unknown mesh config key: " << change.key << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Mesh config change failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool ConfigWatcher::applyFormationConfigChange(const ConfigChange& change) {
+        if (!formation_controller_) {
+            std::cerr << "❌ FormationController not available for formation config change" << std::endl;
+            return false;
+        }
+
+        try {
+            // Formation control configuration changes
+            if (change.key == "formation.default_type") {
+                std::string formation_type = change.new_value;
+                return formation_controller_->SetDefaultFormation(formation_type);
+
+            } else if (change.key == "formation.spacing_meters") {
+                double spacing = std::stod(change.new_value);
+                return formation_controller_->SetFormationSpacing(spacing);
+
+            } else if (change.key == "formation.leader_id") {
+                DroneID leader_id = std::stoul(change.new_value);
+                return formation_controller_->SetFormationLeader(leader_id);
+
+            } else if (change.key == "formation.follow_distance_m") {
+                double distance = std::stod(change.new_value);
+                return formation_controller_->SetFollowDistance(distance);
+
+            } else if (change.key == "formation.collision_avoidance_enabled") {
+                bool enabled = (change.new_value == "true");
+                return formation_controller_->EnableCollisionAvoidance(enabled);
+
+            } else {
+                std::cerr << "⚠️ Unknown formation config key: " << change.key << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Formation config change failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool ConfigWatcher::applyPowerConfigChange(const ConfigChange& change) {
+        if (!power_manager_) {
+            std::cerr << "❌ PowerManager not available for power config change" << std::endl;
+            return false;
+        }
+
+        try {
+            // Power management configuration changes
+            if (change.key == "power.low_battery_threshold") {
+                double threshold = std::stod(change.new_value);
+                return power_manager_->SetLowBatteryThreshold(threshold);
+
+            } else if (change.key == "power.critical_battery_threshold") {
+                double threshold = std::stod(change.new_value);
+                return power_manager_->SetCriticalBatteryThreshold(threshold);
+
+            } else if (change.key == "power.auto_rtl_enabled") {
+                bool enabled = (change.new_value == "true");
+                return power_manager_->EnableAutoRTL(enabled);
+
+            } else if (change.key == "power.power_saving_enabled") {
+                bool enabled = (change.new_value == "true");
+                return power_manager_->EnablePowerSaving(enabled);
+
+            } else {
+                std::cerr << "⚠️ Unknown power config key: " << change.key << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Power config change failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    bool ConfigWatcher::applySafetyConfigChange(const ConfigChange& change) {
+        if (!safety_manager_) {
+            std::cerr << "❌ SafetyManager not available for safety config change" << std::endl;
+            return false;
+        }
+
+        try {
+            // Safety system configuration changes
+            if (change.key == "safety.geofence_enabled") {
+                bool enabled = (change.new_value == "true");
+                return safety_manager_->EnableGeofence(enabled);
+
+            } else if (change.key == "safety.max_altitude_m") {
+                double altitude = std::stod(change.new_value);
+                return safety_manager_->SetMaxAltitude(altitude);
+
+            } else if (change.key == "safety.max_speed_ms") {
+                double speed = std::stod(change.new_value);
+                return safety_manager_->SetMaxSpeed(speed);
+
+            } else if (change.key == "safety.emergency_land_enabled") {
+                bool enabled = (change.new_value == "true");
+                return safety_manager_->EnableEmergencyLand(enabled);
+
+            } else if (change.key == "safety.failsafe_mode") {
+                std::string mode = change.new_value;
+                return safety_manager_->SetFailsafeMode(mode);
+
+            } else {
+                std::cerr << "⚠️ Unknown safety config key: " << change.key << std::endl;
+                return false;
+            }
+
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Safety config change failed: " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+//=============================================================================
+// ✅ HELPER METHODS FOR CONFIG PARSING
+//=============================================================================
+
+    std::vector<uint32_t> ConfigWatcher::parseFrequencyList(const std::string& freq_string) {
+        std::vector<uint32_t> frequencies;
+
+        try {
+            // Parse YAML array format: "[433075000, 433175000, ...]"
+            YAML::Node freq_node = YAML::Load(freq_string);
+
+            if (freq_node.IsSequence()) {
+                for (const auto& freq : freq_node) {
+                    frequencies.push_back(freq.as<uint32_t>());
+                }
+            }
+
+        } catch (const YAML::Exception& e) {
+            std::cerr << "❌ Error parsing frequency list: " << e.what() << std::endl;
+        }
+
+        return frequencies;
+    }
+
+    UWBRangingMode ConfigWatcher::parseRangingMode(const std::string& mode_string) {
+        if (mode_string == "TWR") {
+            return UWBRangingMode::TWR;
+        } else if (mode_string == "DS_TWR") {
+            return UWBRangingMode::DS_TWR;
+        } else if (mode_string == "SS_TWR") {
+            return UWBRangingMode::SS_TWR;
+        } else if (mode_string == "TDOA") {
+            return UWBRangingMode::TDOA;
+        } else {
+            std::cerr << "⚠️ Unknown ranging mode: " << mode_string << ", using DS_TWR" << std::endl;
+            return UWBRangingMode::DS_TWR;
+        }
+    }
+
+    ConfigChangeSeverity ConfigWatcher::determineChangeSeverity(const ConfigChange& change) {
+        // Определяем критичность изменения конфигурации
+
+        // Критические изменения требующие полного рестарта системы
+        if (change.key == "drone.id" ||
+            change.key == "safety.failsafe_mode" ||
+            change.key == "uwb.channel" ||
+            change.key == "uwb.preamble_length") {
+            return ConfigChangeSeverity::SYSTEM_RESTART;
+        }
+
+            // Изменения требующие рестарта компонентов
+        else if (change.key.find("power") == 0 ||
+                 change.key == "mesh.enabled" ||
+                 change.key == "lora.frequency_list") {
+            return ConfigChangeSeverity::COMPONENT_RESTART;
+        }
+
+            // Критические изменения без рестарта
+        else if (change.key.find("safety") == 0 ||
+                 change.key == "formation.leader_id") {
+            return ConfigChangeSeverity::CRITICAL;
+        }
+
+            // Обычные изменения
+        else {
+            return ConfigChangeSeverity::NORMAL;
+        }
+    }
+
+    std::string ConfigWatcher::generateChangeDescription(const ConfigChange& change) {
+        return "Changed " + change.key + " from '" + change.old_value +
+               "' to '" + change.new_value + "'";
+    }
+
+//=============================================================================
+// ✅ COMPONENT REGISTRATION
+//=============================================================================
+
+    void ConfigWatcher::registerCommunicationManager(std::shared_ptr<CommunicationManager> comm_mgr) {
+        communication_manager_ = comm_mgr;
+        std::cout << "✅ CommunicationManager registered with ConfigWatcher" << std::endl;
+    }
+
+    void ConfigWatcher::registerUWBManager(std::shared_ptr<UWBManager> uwb_mgr) {
+        uwb_manager_ = uwb_mgr;
+        std::cout << "✅ UWBManager registered with ConfigWatcher" << std::endl;
+    }
+
+    void ConfigWatcher::registerFormationController(std::shared_ptr<FormationController> form_ctrl) {
+        formation_controller_ = form_ctrl;
+        std::cout << "✅ FormationController registered with ConfigWatcher" << std::endl;
+    }
+
+    void ConfigWatcher::registerPowerManager(std::shared_ptr<PowerManager> power_mgr) {
+        power_manager_ = power_mgr;
+        std::cout << "✅ PowerManager registered with ConfigWatcher" << std::endl;
+    }
+
+    void ConfigWatcher::registerSafetyManager(std::shared_ptr<SafetyManager> safety_mgr) {
+        safety_manager_ = safety_mgr;
+        std::cout << "✅ SafetyManager registered with ConfigWatcher" << std::endl;
+    }
+
+    void ConfigWatcher::registerRestartCallback(std::function<void(const std::string&)> callback) {
+        restart_callback_ = callback;
+        std::cout << "✅ System restart callback registered with ConfigWatcher" << std::endl;
     }
 
 } // namespace SwarmSystem
