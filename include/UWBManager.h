@@ -410,6 +410,28 @@ namespace SwarmControl {
         bool RunDiagnostics();
         bool ResetToDefaults();
 
+// AERIAL UWB INTEGRATION
+        bool EnableAerialMode(bool enable);
+        bool SetAerialConfiguration(const AerialUWB::HighSpeedConfig& config);
+        bool SwitchToAerialMode(AerialUWB::AerialUWBMode mode);
+        AerialUWB::AerialUWBMode GetAerialMode() const;
+
+        // HIGH-SPEED POSITIONING
+        bool PerformHighSpeedRanging(DroneID target, double max_velocity_ms = 27.78);
+        bool EnableMotionPrediction(bool enable);
+        bool SetMaxOperatingSpeed(double speed_ms);
+
+        // DYNAMIC ANCHOR SWITCHING
+        bool RequestAnchorRole();
+        bool ReleaseAnchorRole();
+        bool RotateAnchorNetwork();
+        std::vector<DroneID> GetCurrentAnchors() const;
+
+        // FORMATION SUPPORT
+        bool JoinFormation(DroneID leader_id);
+        bool LeaveFormation();
+        bool SetFormationRole(AerialUWB::AerialUWBMode role);
+
     private:
         // Internal worker methods
         void ranging_worker();
@@ -444,6 +466,10 @@ namespace SwarmControl {
         bool validate_node_measurements();
         bool update_network_statistics();
         bool synchronize_network_time();
+
+        std::unique_ptr<AerialUWB::AerialUWBManager> aerial_manager_;
+        bool aerial_mode_enabled_;
+        AerialUWB::HighSpeedConfig aerial_config_;
     };
 
 } // namespace SwarmControl

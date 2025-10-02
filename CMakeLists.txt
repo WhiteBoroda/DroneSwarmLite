@@ -92,6 +92,13 @@ set(SWARM_CONTROL_HEADERS
         include/FormationController.h
         include/PowerManager.h
         include/SafetyManager.h
+        firmware/drone_firmware/src/AerialUWBManager_ESP32.cpp
+        firmware/drone_firmware/include/AerialUWBManager_ESP32.h
+        src/AerialUWBManager.cpp
+        include/AerialUWBManager.h
+        include/AerialCoordinateSystem.h
+        include/HighSpeedRanging.h
+        include/ConfigHandlers.h
 )
 
 # Create main executable

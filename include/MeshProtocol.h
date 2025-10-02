@@ -176,9 +176,44 @@ namespace MeshNetwork {
         void SetRouteTimeout(Duration timeout);
         void SetNeighborTimeout(Duration timeout);
 
+        // CONFIG HANDLER METHODS
+        bool SetMeshEnabled(bool enabled) {
+            mesh_enabled_ = enabled;
+            if (!enabled) {
+                // Clear routing tables when disabling
+                routing_table_.clear();
+                neighbor_table_.clear();
+            }
+            return true;
+        }
+
+        bool SetMaxHops(uint8_t max_hops) {
+            if (max_hops < 1 || max_hops > 15) return false;
+            max_hops_ = max_hops;
+            return true;
+        }
+
+        bool SetDiscoveryInterval(uint32_t interval_ms) {
+            if (interval_ms < 1000 || interval_ms > 300000) return false;
+            discovery_interval_ms_ = interval_ms;
+            return true;
+        }
+
+        bool SetRoutingAlgorithm(const std::string& algorithm) {
+            if (algorithm == "AODV" || algorithm == "OLSR" || algorithm == "DSR") {
+                routing_algorithm_ = algorithm;
+                return true;
+            }
+            return false;
+        }
+
     private:
         DroneID my_id_;
         bool running_;
+        bool mesh_enabled_ = true;
+        uint8_t max_hops_ = 10;
+        uint32_t discovery_interval_ms_ = 30000;
+        std::string routing_algorithm_ = "AODV";
 
         // Network topology
         std::unordered_map<DroneID, NeighborInfo> neighbors_;

@@ -1,8 +1,5 @@
 //
-// CommunicationManager.cpp - COMPLETE PRODUCTION IMPLEMENTATION
-// ✅ Убрал все заглушки и TODO
-// 🇺🇦 Slava Ukraini! 🇺🇦
-//
+// CommunicationManager.cpp
 
 #include "../include/CommunicationManager.h"
 #include <yaml-cpp/yaml.h>
@@ -27,7 +24,6 @@ namespace SwarmControl {
             , packet_loss_rate_(0.0)
             , link_quality_(0.0)
             , network_time_offset_(0)
-            // ✅ НОВЫЕ ПЕРЕМЕННЫЕ ДЛЯ PRODUCTION
             , communication_timeout_(5000)
             , heartbeat_interval_(1000)
             , max_retries_(3)
@@ -172,7 +168,7 @@ namespace SwarmControl {
     }
 
 //=============================================================================
-// ✅ PRODUCTION MESSAGE TRANSMISSION
+// ✅ MESSAGE TRANSMISSION
 //=============================================================================
 
     bool CommunicationManager::send_message(const SwarmMessage& message, CommProtocol protocol) {
@@ -241,7 +237,7 @@ namespace SwarmControl {
     }
 
 //=============================================================================
-// ✅ PRODUCTION FREQUENCY MANAGEMENT - REAL IMPLEMENTATION
+// ✅ FREQUENCY MANAGEMENT
 //=============================================================================
 
     bool CommunicationManager::enable_frequency_hopping(bool enable) {
@@ -302,11 +298,11 @@ namespace SwarmControl {
         uint32_t new_frequency = frequency_list_[frequency_index_];
 
         if (new_frequency != current_frequency_) {
-            // REAL HARDWARE CONFIGURATION - LoRa module frequency change
+            // HARDWARE CONFIGURATION - LoRa module frequency change
             current_frequency_ = new_frequency;
             current_lora_config_.frequency = current_frequency_;
 
-            // ✅ REAL IMPLEMENTATION: Configure hardware to new frequency
+            // Configure hardware to new frequency
             if (!configure_lora_frequency(current_frequency_)) {
                 log_communication_event("Failed to set hardware frequency", "ERROR");
                 return false;
@@ -349,7 +345,7 @@ namespace SwarmControl {
     }
 
 //=============================================================================
-// ✅ PRODUCTION MESH NETWORKING - REAL IMPLEMENTATION
+// MESH NETWORKING
 //=============================================================================
 
     bool CommunicationManager::enable_mesh_networking(bool enable) {
@@ -402,7 +398,7 @@ namespace SwarmControl {
     }
 
 //=============================================================================
-// ✅ PRODUCTION ADAPTIVE POWER CONTROL - REAL IMPLEMENTATION
+// ADAPTIVE POWER CONTROL
 //=============================================================================
 
     bool CommunicationManager::enable_adaptive_power_control(bool enable) {
@@ -486,7 +482,7 @@ namespace SwarmControl {
     }
 
 //=============================================================================
-// ✅ PRODUCTION COMMUNICATION TIMEOUTS - REAL IMPLEMENTATION
+//COMMUNICATION TIMEOUTS
 //=============================================================================
 
     bool CommunicationManager::set_communication_timeout(uint32_t timeout_ms) {
@@ -537,7 +533,7 @@ namespace SwarmControl {
     }
 
 //=============================================================================
-// ✅ PRODUCTION POWER MANAGEMENT - REAL IMPLEMENTATION
+// POWER MANAGEMENT
 //=============================================================================
 
     bool CommunicationManager::set_power_level(int8_t power_dbm) {
@@ -547,7 +543,7 @@ namespace SwarmControl {
             return false;
         }
 
-        // ✅ REAL HARDWARE CONFIGURATION
+        // HARDWARE CONFIGURATION
         if (!configure_lora_power(power_dbm)) {
             log_communication_event("Failed to set hardware power", "ERROR");
             return false;
@@ -607,12 +603,11 @@ namespace SwarmControl {
     }
 
 //=============================================================================
-// ✅ PRODUCTION HARDWARE INTERFACE - REAL IMPLEMENTATION
+// HARDWARE INTERFACE
 //=============================================================================
 
     bool CommunicationManager::configure_lora_frequency(uint32_t frequency) {
-        // ✅ REAL SPI COMMUNICATION WITH LORA MODULE
-        // Реальна робота з LoRa чіпом через SPI
+        // SPI COMMUNICATION WITH LORA MODULE
 
         try {
             // 1. Put LoRa in standby mode

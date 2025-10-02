@@ -20,6 +20,7 @@
 #include "../include/ConfigManager.h"
 #include "../include/CryptoManager.h"
 #include "../include/ConfigWatcher.h"
+#include "../include/ConfigHandlers.h"
 
 using namespace SwarmSystem;
 
@@ -84,9 +85,12 @@ bool InitializeAllSystems() {
             return false;
         }
 
-        // Настраиваем криптографию в CommunicationManager
-        comm_manager->set_crypto_manager(crypto_manager.get());
-        std::cout << "✅ CommunicationManager initialized (LoRa + ELRS)" << std::endl;
+        // ✅ FIX: Use correct method name
+        if (!comm_manager->initialize_encryption(crypto_manager)) {
+            std::cerr << "Failed to link cryptography to communication!" << std::endl;
+            return false;
+        }
+        std::cout << "✅ CommunicationManager initialized (LoRa + ELRS + Crypto)" << std::endl;
 
         // 4. UWBManager - РЕАЛЬНАЯ ИНИЦИАЛИЗАЦИЯ
         uwb_manager = std::make_unique<UWBManager>();
