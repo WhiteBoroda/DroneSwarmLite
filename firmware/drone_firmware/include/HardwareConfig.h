@@ -1,6 +1,6 @@
 // firmware/drone_firmware/include/HardwareConfig.h
 // Конфигурация железа ESP32 для дрона
-// 🇺🇦 Slava Ukraini! 🇺🇦
+
 
 #pragma once
 

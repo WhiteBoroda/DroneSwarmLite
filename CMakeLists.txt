@@ -99,6 +99,14 @@ set(SWARM_CONTROL_HEADERS
         include/AerialCoordinateSystem.h
         include/HighSpeedRanging.h
         include/ConfigHandlers.h
+        src/HighSpeedRanging.cpp
+        src/AerialCoordinateSystem.cpp
+        firmware/drone_firmware/src/UWBIntegration.cpp
+        firmware/drone_firmware/include/UWBIntegration.h
+        firmware/drone_firmware/include/SwarmPairing.h
+        firmware/drone_firmware/src/SwarmPairing.cpp
+        firmware/drone_firmware/include/PairingCrypto.h
+        firmware/drone_firmware/src/PairingCrypto.cpp
 )
 
 # Create main executable

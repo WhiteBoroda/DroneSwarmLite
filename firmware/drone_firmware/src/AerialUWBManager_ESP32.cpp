@@ -1,7 +1,6 @@
 //=============================================================================
 // ✅ ESP32 AERIAL UWB IMPLEMENTATION
 // High-speed drone positioning with dynamic TAG/ANCHOR switching
-// 🇺🇦 Slava Ukraini! 🇺🇦
 //=============================================================================
 
 // firmware/drone_firmware/src/AerialUWBManager_ESP32.cpp
