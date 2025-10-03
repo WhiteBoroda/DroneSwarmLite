@@ -9,12 +9,14 @@ PairingCryptoManager::PairingCryptoManager(uint64_t my_mac)
         : keys_generated_(false)
         , shared_secret_derived_(false)
         , swarm_key_received_(false)
-        , my_mac_(my_mac) {
+        , my_mac_(my_mac)
+        , lora_(lora) {
 
     memset(my_public_key_, 0, sizeof(my_public_key_));
     memset(my_private_key_, 0, sizeof(my_private_key_));
     memset(shared_secret_, 0, sizeof(shared_secret_));
     memset(swarm_master_key_, 0, sizeof(swarm_master_key_));
+    memset(coordinator_public_key_, 0, sizeof(coordinator_public_key_));
 
     // Ініціалізація mbed TLS contexts
     mbedtls_ecdh_init(&ecdh_ctx_);
@@ -148,6 +150,11 @@ bool PairingCryptoManager::BroadcastCoordinatorPublicKey() {
 
     msg.checksum = CalculateMessageChecksum(&msg, sizeof(msg) - sizeof(msg.checksum));
 
+    if (!lora_) {
+        Serial.println("❌ LoRa module not initialized!");
+        return false;
+    }
+
     // Відправка через LoRa (3 рази для надійності)
     for (int i = 0; i < 3; i++) {
         LoRa.beginPacket();
@@ -159,6 +166,7 @@ bool PairingCryptoManager::BroadcastCoordinatorPublicKey() {
     LoRa.receive();
 
     Serial.println("✅ Public key broadcast complete");
+    PrintKeyInfo("Coordinator Public Key", my_public_key_, 16);
     return true;
 }
 
@@ -191,6 +199,44 @@ bool PairingCryptoManager::ReceiveDronePublicKey(const DronePublicKey* key_msg) 
 
     return true;
 }
+
+bool PairingCryptoManager::SendMyPublicKey() {
+    if (!keys_generated_) {
+        Serial.println("❌ Keys not generated!");
+        return false;
+    }
+
+    DronePublicKey key_msg;
+    key_msg.message_type = 0xE2;
+    key_msg.drone_mac = my_mac_;
+    memcpy(key_msg.public_key, my_public_key_, sizeof(my_public_key_));
+    key_msg.timestamp = millis();
+
+    // PSK hash для верифікації
+    GeneratePreSharedHash(key_msg.psk_hash);
+
+    // Checksum
+    key_msg.checksum = CalculateMessageChecksum(&key_msg,
+                                                sizeof(key_msg) - sizeof(key_msg.checksum));
+
+    Serial.println("📡 Sending my public key to coordinator...");
+
+    // ✅ ВИПРАВЛЕНО: ДОДАНО LoRa TRANSMISSION
+    if (!lora_) {
+        Serial.println("❌ LoRa module not initialized!");
+        return false;
+    }
+
+    lora_->beginPacket();
+    lora_->write((uint8_t*)&key_msg, sizeof(key_msg));
+    lora_->endPacket();
+
+    Serial.println("✅ My public key sent via LoRa");
+    PrintKeyInfo("My Public Key", my_public_key_, 16);
+
+    return true;
+}
+
 
 //=============================================================================
 // ✅ COORDINATOR: DERIVE SHARED SECRET З ДРОНОМ
@@ -349,6 +395,7 @@ bool PairingCryptoManager::EncryptIDAssignment(
 
     return true;
 }
+
 
 bool PairingCryptoManager::DecryptIDAssignment(
         const EncryptedIDAssignment* encrypted_msg,
@@ -555,4 +602,230 @@ void PairingCryptoManager::PrintCryptoStatus() {
     Serial.printf("║ Swarm Key Received: %-14s ║\n", swarm_key_received_ ? "YES" : "NO");
     Serial.printf("║ Drone Keys Stored:  %-14zu ║\n", drone_keys_.size());
     Serial.println("╚════════════════════════════════════╝\n");
+}
+bool PairingCryptoManager::ReceiveCoordinatorPublicKey(const CoordinatorPublicKey* key_msg) {
+    if (!key_msg) {
+        Serial.println("❌ Null coordinator key message");
+        return false;
+    }
+
+    // Верифікація checksum
+    uint32_t expected_checksum = CalculateMessageChecksum(
+            key_msg,
+            sizeof(*key_msg) - sizeof(key_msg->checksum)
+    );
+
+    if (key_msg->checksum != expected_checksum) {
+        Serial.println("❌ Invalid checksum in coordinator public key");
+        return false;
+    }
+
+    // Верифікація message type
+    if (key_msg->message_type != 0xE1) {
+        Serial.printf("❌ Invalid message type: 0x%02X (expected 0xE1)\n", key_msg->message_type);
+        return false;
+    }
+
+    Serial.printf("✅ Received coordinator public key from MAC=%012llX\n",
+                  key_msg->coordinator_mac);
+
+    PrintKeyInfo("Coordinator Public Key", key_msg->public_key, 16);
+
+    return true;
+}
+
+//=============================================================================
+// ✅ DRONE: SEND MY PUBLIC KEY TO COORDINATOR
+//=============================================================================
+
+bool PairingCryptoManager::SendMyPublicKey() {
+    if (!keys_generated_) {
+        Serial.println("❌ Keys not generated yet!");
+        return false;
+    }
+
+    Serial.println("📡 Sending my public key to coordinator...");
+
+    // Створюємо повідомлення
+    DronePublicKey msg;
+    msg.message_type = 0xE2;
+    msg.drone_mac = my_mac_;
+    memcpy(msg.public_key, my_public_key_, sizeof(msg.public_key));
+    msg.timestamp = millis();
+
+    // Генеруємо PSK hash для верифікації
+    GeneratePreSharedHash(msg.psk_hash);
+
+    // Обчислюємо checksum
+    msg.checksum = CalculateMessageChecksum(&msg, sizeof(msg) - sizeof(msg.checksum));
+
+    // Відправка через LoRa (3 рази для надійності)
+    for (int i = 0; i < 3; i++) {
+        LoRa.beginPacket();
+        LoRa.write((uint8_t*)&msg, sizeof(msg));
+        LoRa.endPacket();
+        delay(100);
+    }
+
+    LoRa.receive();
+
+    Serial.println("✅ My public key sent");
+    PrintKeyInfo("My Public Key", my_public_key_, 16);
+
+    return true;
+}
+
+//=============================================================================
+// ✅ DRONE: DERIVE SHARED SECRET WITH COORDINATOR
+//=============================================================================
+
+bool PairingCryptoManager::DeriveSharedSecretWithCoordinator(
+        const uint8_t* coordinator_public_key
+) {
+    if (!keys_generated_) {
+        Serial.println("❌ My keys not generated!");
+        return false;
+    }
+
+    if (!coordinator_public_key) {
+        Serial.println("❌ Coordinator public key is NULL!");
+        return false;
+    }
+
+    Serial.println("🔐 Computing shared secret with coordinator...");
+
+    // 1. Імпорт coordinator public key
+    mbedtls_ecp_point Q_peer;
+    mbedtls_ecp_point_init(&Q_peer);
+
+    int ret = mbedtls_ecp_point_read_binary(
+            &ecdh_ctx_.grp,
+            &Q_peer,
+            coordinator_public_key,
+            PairingCrypto::PUBLIC_KEY_SIZE
+    );
+
+    if (ret != 0) {
+        mbedtls_ecp_point_free(&Q_peer);
+        Serial.printf("❌ Failed to import coordinator public key: -0x%04x\n", -ret);
+        return false;
+    }
+
+    // 2. Verify public key is on curve
+    ret = mbedtls_ecp_check_pubkey(&ecdh_ctx_.grp, &Q_peer);
+    if (ret != 0) {
+        mbedtls_ecp_point_free(&Q_peer);
+        Serial.printf("❌ Coordinator public key validation failed: -0x%04x\n", -ret);
+        return false;
+    }
+
+    // 3. Обчислення shared secret: z = d * Q_peer
+    mbedtls_mpi z;
+    mbedtls_mpi_init(&z);
+
+    ret = mbedtls_ecdh_compute_shared(
+            &ecdh_ctx_.grp,
+            &z,
+            &Q_peer,
+            &ecdh_ctx_.d,  // My private key
+            mbedtls_ctr_drbg_random,
+            &drbg_
+    );
+
+    if (ret != 0) {
+        mbedtls_mpi_free(&z);
+        mbedtls_ecp_point_free(&Q_peer);
+        Serial.printf("❌ ECDH compute shared failed: -0x%04x\n", -ret);
+        return false;
+    }
+
+    // 4. Експорт shared secret
+    ret = mbedtls_mpi_write_binary(&z, shared_secret_, PairingCrypto::SHARED_SECRET_SIZE);
+
+    // Cleanup
+    mbedtls_mpi_free(&z);
+    mbedtls_ecp_point_free(&Q_peer);
+
+    if (ret != 0) {
+        Serial.printf("❌ Failed to export shared secret: -0x%04x\n", -ret);
+        return false;
+    }
+
+    shared_secret_derived_ = true;
+
+    Serial.println("✅ Shared secret computed successfully!");
+    PrintKeyInfo("Shared Secret (first 8 bytes)", shared_secret_, 8);
+
+    return true;
+}
+
+//=============================================================================
+// ✅ DRONE: RECEIVE SWARM MASTER KEY
+//=============================================================================
+
+bool PairingCryptoManager::ReceiveSwarmMasterKey(const SwarmMasterKey* key_msg) {
+    if (!key_msg) {
+        Serial.println("❌ Null swarm key message");
+        return false;
+    }
+
+    if (!shared_secret_derived_) {
+        Serial.println("❌ No shared secret - cannot decrypt swarm key!");
+        return false;
+    }
+
+    // Верифікація checksum
+    uint32_t expected_checksum = CalculateMessageChecksum(
+            key_msg,
+            sizeof(*key_msg) - sizeof(key_msg->checksum)
+    );
+
+    if (key_msg->checksum != expected_checksum) {
+        Serial.println("❌ Invalid checksum in swarm key message");
+        return false;
+    }
+
+    // Верифікація message type
+    if (key_msg->message_type != 0xE4) {
+        Serial.printf("❌ Invalid message type: 0x%02X (expected 0xE4)\n", key_msg->message_type);
+        return false;
+    }
+
+    Serial.printf("📨 Received swarm master key from coordinator %012llX\n",
+                  key_msg->coordinator_mac);
+
+    // Дешифруємо swarm master key використовуючи shared secret
+    // encrypted_key містить: [32 bytes key + 16 bytes auth tag] = 48 bytes
+
+    uint8_t decrypted_key[PairingCrypto::SWARM_KEY_SIZE];
+    uint8_t* ciphertext = (uint8_t*)key_msg->encrypted_key;
+    uint8_t* auth_tag = ciphertext + PairingCrypto::SWARM_KEY_SIZE;
+
+    if (!DecryptWithSharedSecret(
+            ciphertext,
+            PairingCrypto::SWARM_KEY_SIZE,
+            shared_secret_,
+            key_msg->nonce,
+            auth_tag,
+            decrypted_key
+    )) {
+        Serial.println("❌ Failed to decrypt swarm master key!");
+        return false;
+    }
+
+    // Зберігаємо swarm master key
+    memcpy(swarm_master_key_, decrypted_key, sizeof(swarm_master_key_));
+    swarm_key_received_ = true;
+
+    Serial.println("✅ Swarm master key received and decrypted");
+    Serial.printf("   Key version: %u\n", key_msg->key_version);
+    PrintKeyInfo("Swarm Master Key", swarm_master_key_, 8);
+
+    // Зберігаємо в EEPROM
+    SaveSwarmKeyToEEPROM();
+
+    // Очищаємо decrypted_key з пам'яті
+    memset(decrypted_key, 0, sizeof(decrypted_key));
+
+    return true;
 }

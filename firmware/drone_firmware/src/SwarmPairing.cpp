@@ -143,24 +143,95 @@ bool SwarmPairingManager::RunKeyExchangePhase() {
         crypto_manager_->BroadcastCoordinatorPublicKey();
 
         // Чекаємо public keys від всіх дронів
+        Serial.printf("👂 Waiting for public keys from %d drones...\n", discovered_drones_.size());
+
         unsigned long wait_start = millis();
+        size_t keys_received = 0;
+
         while (millis() - wait_start < 10000) {  // 10 сек timeout
-            // Обробка вхідних public keys
+            int packetSize = LoRa.parsePacket();
+
+            if (packetSize == sizeof(DronePublicKey)) {
+                DronePublicKey drone_key;
+                LoRa.readBytes((uint8_t * ) & drone_key, sizeof(drone_key));
+
+                // Перевірка типу повідомлення
+                if (drone_key.message_type == 0xE2) {
+                    // ✅ Зберігаємо public key
+                    if (crypto_manager_->ReceiveDronePublicKey(&drone_key)) {
+                        keys_received++;
+                        Serial.printf("✅ [%d/%d] Received key from drone %012llX\n",
+                                      keys_received, discovered_drones_.size(), drone_key.drone_mac);
+
+                        // Blink LED
+                        digitalWrite(PairingConfig::LED_DISCOVERY_PIN, HIGH);
+                        delay(50);
+                        digitalWrite(PairingConfig::LED_DISCOVERY_PIN, LOW);
+                    }
+                }
+            }
+
             delay(100);
         }
 
-        // Обчислюємо shared secrets з кожним дроном
-        for (const auto& drone : discovered_drones_) {
-            crypto_manager_->DeriveSharedSecretWithDrone(drone.mac_address);
+        if (keys_received == 0) {
+            Serial.println("❌ No drone public keys received!");
+            return false;
         }
+
+        Serial.printf("✅ Received %d/%d public keys\n\n", keys_received, discovered_drones_.size());
+
+        // Обчислюємо shared secrets з кожним дроном
+        Serial.println("🔐 Computing shared secrets with drones...");
+
+        size_t secrets_computed = 0;
+        for (const auto &drone: discovered_drones_) {
+            if (crypto_manager_->DeriveSharedSecretWithDrone(drone.mac_address)) {
+                secrets_computed++;
+                Serial.printf("✅ [%d/%d] Shared secret with %012llX\n",
+                              secrets_computed, discovered_drones_.size(), drone.mac_address);
+            } else {
+                Serial.printf("❌ Failed with %012llX\n", drone.mac_address);
+            }
+        }
+
+        if (secrets_computed == 0) {
+            Serial.println("❌ Failed to compute any shared secrets!");
+            return false;
+        }
+
+        Serial.printf("\n✅ KEY EXCHANGE: %d/%d secrets\n\n", secrets_computed, discovered_drones_.size());
+
 
     } else {
         // Drone чекає public key координатора
-        unsigned long wait_start = millis();
+        Serial.println("👂 Waiting for coordinator public key...");
+
+        CoordinatorPublicKey coord_key;
         bool received = false;
+        unsigned long wait_start = millis();
 
         while (millis() - wait_start < 10000 && !received) {
-            // Перевірка чи отримали coordinator public key
+            int packetSize = LoRa.parsePacket();
+
+            if (packetSize == sizeof(CoordinatorPublicKey)) {
+                LoRa.readBytes((uint8_t * ) & coord_key, sizeof(coord_key));
+
+                if (coord_key.message_type == 0xE1) {
+                    // ✅ Зберігаємо coordinator public key
+                    if (crypto_manager_->ReceiveCoordinatorPublicKey(&coord_key)) {
+                        received = true;
+                        Serial.printf("✅ Received coordinator key from %012llX\n",
+                                      coord_key.coordinator_mac);
+
+                        // Blink LED
+                        digitalWrite(PairingConfig::LED_DISCOVERY_PIN, HIGH);
+                        delay(100);
+                        digitalWrite(PairingConfig::LED_DISCOVERY_PIN, LOW);
+                    }
+                }
+            }
+
             delay(100);
         }
 
@@ -169,15 +240,25 @@ bool SwarmPairingManager::RunKeyExchangePhase() {
             return false;
         }
 
+        // Затримка для рандомізації відповідей (уникаємо колізій)
+        delay(random(100, 500));
+
         // Відправляємо свій public key
-        crypto_manager_->SendMyPublicKey();
+        Serial.println("📡 Sending my public key to coordinator...");
+        if (!crypto_manager_->SendMyPublicKey()) {
+            Serial.println("❌ Failed to send public key!");
+            return false;
+        }
 
-        // Обчислюємо shared secret
-        // crypto_manager_->DeriveSharedSecretWithCoordinator(...);
+        // ✅ РОЗКОМЕНТУВАТИ: Обчислюємо shared secret
+        Serial.println("🔐 Computing shared secret with coordinator...");
+        if (!crypto_manager_->DeriveSharedSecretWithCoordinator(coord_key.public_key)) {
+            Serial.println("❌ Failed to derive shared secret!");
+            return false;
+        }
+
+        Serial.println("✅ Shared secret computed successfully!");
     }
-
-    Serial.println("✅ KEY EXCHANGE COMPLETE\n");
-    return true;
 }
 
 bool SwarmPairingManager::AssignEncryptedDroneIDs() {

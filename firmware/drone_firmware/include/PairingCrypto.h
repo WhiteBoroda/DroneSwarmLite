@@ -90,6 +90,8 @@ private:
     uint8_t my_private_key_[PairingCrypto::PRIVATE_KEY_SIZE];
     uint8_t shared_secret_[PairingCrypto::SHARED_SECRET_SIZE];
     uint8_t swarm_master_key_[PairingCrypto::SWARM_KEY_SIZE];
+    uint8_t coordinator_public_key_[PairingCrypto::PUBLIC_KEY_SIZE];
+    LoRaModule* lora_;
 
     // Стан
     bool keys_generated_;
@@ -107,7 +109,7 @@ private:
     std::vector<DroneKeyInfo> drone_keys_;  // Тільки для координатора
 
 public:
-    PairingCryptoManager(uint64_t my_mac);
+    PairingCryptoManager(uint64_t my_mac, LoRaModule* lora);
     ~PairingCryptoManager();
 
     //=========================================================================
