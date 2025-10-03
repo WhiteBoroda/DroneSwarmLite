@@ -25,14 +25,20 @@ SwarmPairingManager::SwarmPairingManager()
         , coordinator_mac_(0)
         , beacons_sent_(0)
         , beacons_received_(0)
-        , discovery_start_time_(0) {
+        , discovery_start_time_(0)
+        , pairing_button_pressed_(false)
+        , pairing_button_press_time_(0) {
 
     my_mac_address_ = GetESP32MacAddress();
+    pinMode(HardwarePins::PAIRING_BUTTON, INPUT_PULLUP);
+    pinMode(HardwarePins::PAIRING_LED, OUTPUT);
+    digitalWrite(HardwarePins::PAIRING_LED, LOW);
 
     Serial.println("\n╔════════════════════════════════════════╗");
     Serial.println("║  🤝 SWARM PAIRING MANAGER СТВОРЕНО   ║");
     Serial.println("╚════════════════════════════════════════╝");
     Serial.printf("📱 Мій MAC: %012llX\n\n", my_mac_address_);
+    Serial.println("🔘 Кнопка PAIRING готова (Pin 26)\n");
 
     g_pairing_manager = this;
 }
@@ -58,6 +64,37 @@ bool SwarmPairingManager::EnterAutoDiscoveryMode() {
         return false;
     }
 
+    if (!WaitForPairingButton(300000)) { // Чекаємо 5 хв
+        Serial.println("❌ Pairing скасовано (timeout кнопки)");
+        return false;
+    }
+
+    // ✅ ЗАТРИМКА ДЛЯ СИНХРОНІЗАЦІЇ
+    // Після натискання кнопки на ПЕРШОМУ дроні, оператор має час увімкнути інші
+    if (is_coordinator_) {
+        Serial.println("\n⏰ COORDINATOR: Чекаю 2 хв для включення інших дронів...");
+        Serial.println("   Включай інші дрони та натискай на них кнопку!");
+
+        for (int i = 120; i > 0; i--) {
+            Serial.printf("   ⏱️  %d секунд...\n", i);
+
+            // LED пульсує (показує що чекаємо)
+            int brightness = (i % 2) ? 255 : 50;
+            analogWrite(HardwarePins::PAIRING_LED, brightness);
+
+            delay(1000);
+            esp_task_wdt_reset();
+        }
+
+        Serial.println("✅ Час вийшов - ПОЧИНАЄМО DISCOVERY!\n");
+        digitalWrite(HardwarePins::PAIRING_LED, HIGH);
+
+    } else {
+        // Follower - невелика затримка
+        Serial.println("\n⏰ FOLLOWER: Чекаю 5 секунд перед discovery...");
+        delay(5000);
+    }
+
     // ФАЗА 1: Discovery (пошук сусідів)
     if (!RunDiscoveryPhase()) {
         Serial.println("❌ Discovery phase failed!");
@@ -81,6 +118,124 @@ bool SwarmPairingManager::EnterAutoDiscoveryMode() {
     } else {
         return WaitForEncryptedIDAssignment();
     }
+}
+
+bool SwarmPairingManager::WaitForPairingButton(uint32_t timeout_ms) {
+    Serial.println("\n╔══════════════════════════════════════╗");
+    Serial.println("║  🔘 ОЧІКУВАННЯ КНОПКИ START PAIRING ║");
+    Serial.println("╚══════════════════════════════════════╝\n");
+
+    if (timeout_ms == 0) {
+        Serial.println("⏳ Чекаю БЕЗКІНЕЧНО...");
+        Serial.println("   Натисни кнопку PAIRING для старту");
+    } else {
+        Serial.printf("⏳ Чекаю %u секунд...\n", timeout_ms / 1000);
+        Serial.println("   Натисни кнопку PAIRING для старту");
+    }
+
+    Serial.println("\n💡 КНОПКА:");
+    Serial.println("   - Короткий натиск (< 2 сек) = JOIN режим (follower)");
+    Serial.println("   - Довгий натиск (> 2 сек) = COORDINATOR режим\n");
+
+    unsigned long start_time = millis();
+    unsigned long last_blink = 0;
+    bool led_state = false;
+
+    while (true) {
+        // Timeout перевірка
+        if (timeout_ms > 0 && (millis() - start_time > timeout_ms)) {
+            Serial.println("\n⏰ TIMEOUT! Кнопка не натиснута");
+            digitalWrite(HardwarePins::PAIRING_LED, LOW);
+            return false;
+        }
+
+        // LED мигає (індикація очікування)
+        if (millis() - last_blink > 500) {
+            led_state = !led_state;
+            digitalWrite(HardwarePins::PAIRING_LED, led_state);
+            last_blink = millis();
+        }
+
+        // Перевірка кнопки (з debouncing)
+        if (IsPairingButtonPressed()) {
+            unsigned long press_start = millis();
+
+            // Чекаємо поки кнопка натиснута
+            while (digitalRead(HardwarePins::PAIRING_BUTTON) == LOW) {
+                delay(10);
+
+                // LED швидко мигає під час натискання
+                if ((millis() - press_start) % 100 < 50) {
+                    digitalWrite(HardwarePins::PAIRING_LED, HIGH);
+                } else {
+                    digitalWrite(HardwarePins::PAIRING_LED, LOW);
+                }
+            }
+
+            unsigned long press_duration = millis() - press_start;
+
+            // Визначаємо режим
+            if (press_duration > LONG_PRESS_MS) {
+                // ДОВГИЙ натиск = COORDINATOR
+                Serial.println("\n👑 ДОВГИЙ НАТИСК - COORDINATOR MODE");
+                is_coordinator_ = true;
+
+                // LED постійно світиться (coordinator)
+                digitalWrite(HardwarePins::PAIRING_LED, HIGH);
+                delay(1000);
+
+            } else {
+                // КОРОТКИЙ натиск = FOLLOWER
+                Serial.println("\n🚁 КОРОТКИЙ НАТИСК - FOLLOWER MODE");
+                is_coordinator_ = false;
+
+                // LED швидко мигає 3 рази (follower)
+                for (int i = 0; i < 3; i++) {
+                    digitalWrite(HardwarePins::PAIRING_LED, HIGH);
+                    delay(100);
+                    digitalWrite(HardwarePins::PAIRING_LED, LOW);
+                    delay(100);
+                }
+            }
+
+            Serial.println("✅ Кнопка натиснута - ПОЧИНАЄМО PAIRING!\n");
+            return true;
+        }
+
+        delay(10);
+        esp_task_wdt_reset();
+    }
+}
+
+bool SwarmPairingManager::IsPairingButtonPressed() {
+    static bool last_button_state = HIGH;
+    static unsigned long last_debounce_time = 0;
+
+    bool current_state = digitalRead(HardwarePins::PAIRING_BUTTON);
+
+    // Якщо стан змінився
+    if (current_state != last_button_state) {
+        last_debounce_time = millis();
+    }
+
+    // Якщо пройшов debounce час
+    if ((millis() - last_debounce_time) > BUTTON_DEBOUNCE_MS) {
+        // Якщо кнопка натиснута (LOW бо INPUT_PULLUP)
+        if (current_state == LOW && !pairing_button_pressed_) {
+            pairing_button_pressed_ = true;
+            pairing_button_press_time_ = millis();
+            last_button_state = current_state;
+            return true;
+        }
+
+        // Якщо кнопка відпущена
+        if (current_state == HIGH) {
+            pairing_button_pressed_ = false;
+        }
+    }
+
+    last_button_state = current_state;
+    return false;
 }
 
 //=============================================================================
@@ -795,24 +950,266 @@ uint64_t GetESP32MacAddress() {
     return mac_uint64;
 }
 
-bool InitializeLoRaForDiscovery() {
-    Serial.println("📡 Ініціалізація LoRa для discovery...");
+bool SwarmPairingManager::InitializeLoRaForDiscovery() {
+    Serial.println("\n╔════════════════════════════════════════╗");
+    Serial.println("║  📡 ІНІЦІАЛІЗАЦІЯ LoRa МОДУЛЯ        ║");
+    Serial.println("╚════════════════════════════════════════╝\n");
 
-    LoRa.setPins(SS_LORA_PIN, RST_LORA_PIN, DIO0_LORA_PIN);
+    // ✅ КРОК 1: Ініціалізація SPI шини
+    Serial.println("1️⃣ Ініціалізація SPI шини...");
+    SPI.begin(HardwarePins::LORA_SCK,
+              HardwarePins::LORA_MISO,
+              HardwarePins::LORA_MOSI,
+              HardwarePins::LORA_SS);
+    Serial.println("   ✅ SPI готовий");
+
+    // ✅ КРОК 2: Налаштування LoRa пінів
+    Serial.println("2️⃣ Налаштування LoRa пінів...");
+    Serial.printf("   CS:   GPIO %d\n", HardwarePins::LORA_SS);
+    Serial.printf("   RST:  GPIO %d\n", HardwarePins::LORA_RST);
+    Serial.printf("   DIO0: GPIO %d\n", HardwarePins::LORA_DIO0);
+
+    LoRa.setPins(HardwarePins::LORA_SS,
+                 HardwarePins::LORA_RST,
+                 HardwarePins::LORA_DIO0);
+    Serial.println("   ✅ Піни налаштовані");
+
+    // ✅ КРОК 3: Запуск LoRa на частоті discovery
+    Serial.println("3️⃣ Запуск LoRa модуля...");
+    Serial.printf("   Частота: %.1f MHz\n", PairingConfig::DISCOVERY_FREQUENCY / 1e6);
 
     if (!LoRa.begin(PairingConfig::DISCOVERY_FREQUENCY)) {
+        Serial.println("   ❌ ПОМИЛКА: LoRa.begin() failed!");
+        Serial.println("\n🔍 ДІАГНОСТИКА:");
+        Serial.println("   - Перевір підключення SPI");
+        Serial.println("   - Перевір живлення LoRa модуля");
+        Serial.println("   - Перевір що використовуєш SX1276/SX1278");
+        return false;
+    }
+    Serial.println("   ✅ LoRa модуль запущено");
+
+    // ✅ КРОК 4: Налаштування Spreading Factor
+    Serial.println("4️⃣ Налаштування Spreading Factor...");
+    Serial.printf("   SF: %d\n", CommConfig::LORA_SPREADING_FACTOR);
+    LoRa.setSpreadingFactor(CommConfig::LORA_SPREADING_FACTOR);
+    Serial.println("   ✅ SF налаштовано");
+
+    // ✅ КРОК 5: Налаштування Bandwidth
+    Serial.println("5️⃣ Налаштування Bandwidth...");
+    Serial.printf("   BW: %d kHz\n", CommConfig::LORA_BANDWIDTH);
+    LoRa.setSignalBandwidth(CommConfig::LORA_BANDWIDTH * 1000);  // kHz → Hz
+    Serial.println("   ✅ BW налаштовано");
+
+    // ✅ КРОК 6: Налаштування Coding Rate
+    Serial.println("6️⃣ Налаштування Coding Rate...");
+    Serial.printf("   CR: 4/%d\n", CommConfig::LORA_CODING_RATE);
+    LoRa.setCodingRate4(CommConfig::LORA_CODING_RATE);
+    Serial.println("   ✅ CR налаштовано");
+
+    // ✅ КРОК 7: Налаштування TX Power
+    Serial.println("7️⃣ Налаштування TX Power...");
+    Serial.printf("   Power: %d dBm\n", CommConfig::LORA_TX_POWER);
+    LoRa.setTxPower(CommConfig::LORA_TX_POWER);
+    Serial.println("   ✅ TX Power налаштовано");
+
+    // ✅ КРОК 8: Налаштування Sync Word (КРИТИЧНО!)
+    Serial.println("8️⃣ Налаштування Sync Word...");
+    Serial.println("   Sync Word: 0x34 (Приватна мережа 🇺🇦)");
+    LoRa.setSyncWord(0x34);  // Приватна мережа Ukrainian forces
+    Serial.println("   ✅ Sync Word налаштовано");
+    Serial.println("   ⚠️  ВАЖЛИВО: Тільки дрони з Sync Word 0x34 будуть чути один одного!");
+
+    // ✅ КРОК 9: Увімкнення CRC
+    Serial.println("9️⃣ Увімкнення CRC...");
+    LoRa.enableCrc();
+    Serial.println("   ✅ CRC увімкнено");
+
+    // ✅ КРОК 10: Налаштування Preamble Length
+    Serial.println("🔟 Налаштування Preamble Length...");
+    LoRa.setPreambleLength(8);  // 8 symbols - стандарт
+    Serial.println("   ✅ Preamble = 8 symbols");
+
+    // ✅ КРОК 11: Перехід в RX режим (слухати)
+    Serial.println("1️⃣1️⃣ Перехід в RX режим...");
+    LoRa.receive();
+    Serial.println("   ✅ LoRa слухає ефір");
+
+    // ✅ КРОК 12: Діагностика та тести
+    Serial.println("\n📊 ДІАГНОСТИКА РЕЗУЛЬТАТІВ:");
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    // Перевірка версії чіпа
+    uint8_t version = LoRa.readRegister(0x42);  // REG_VERSION
+    Serial.printf("Версія чіпа:     0x%02X ", version);
+    if (version == 0x12) {
+        Serial.println("(SX1276/78 ✅)");
+    } else {
+        Serial.printf("(Невідомий чіп! ⚠️)\n");
+    }
+
+    // Перевірка частоти
+    long freq = LoRa.getSignalBandwidth();
+    Serial.printf("Bandwidth:       %ld Hz\n", freq);
+
+    // Перевірка Spreading Factor
+    int sf = LoRa.getSpreadingFactor();
+    Serial.printf("Spreading Factor: SF%d\n", sf);
+
+    // Тестова передача (для перевірки)
+    Serial.println("\n🧪 ТЕСТОВА ПЕРЕДАЧА:");
+    LoRa.beginPacket();
+    LoRa.write(0xAA);  // Тестовий байт
+    LoRa.write(0xBB);
+    if (LoRa.endPacket()) {
+        Serial.println("   ✅ Тестовий пакет відправлено");
+    } else {
+        Serial.println("   ⚠️  Помилка відправки тестового пакету");
+    }
+
+    // Повернення в RX режим після тесту
+    LoRa.receive();
+
+    Serial.println("\n╔════════════════════════════════════════╗");
+    Serial.println("║  ✅ LoRa ГОТОВИЙ ДО PAIRING!         ║");
+    Serial.println("╚════════════════════════════════════════╝\n");
+
+    // Виводимо фінальну конфігурацію
+    Serial.println("📋 ФІНАЛЬНА КОНФІГУРАЦІЯ:");
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.printf("Частота:         %.1f MHz\n", PairingConfig::DISCOVERY_FREQUENCY / 1e6);
+    Serial.printf("Spreading Factor: SF%d\n", CommConfig::LORA_SPREADING_FACTOR);
+    Serial.printf("Bandwidth:       %d kHz\n", CommConfig::LORA_BANDWIDTH);
+    Serial.printf("Coding Rate:     4/%d\n", CommConfig::LORA_CODING_RATE);
+    Serial.printf("TX Power:        %d dBm\n", CommConfig::LORA_TX_POWER);
+    Serial.printf("Sync Word:       0x34 🇺🇦\n");
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    // Обчислення очікуваних параметрів
+    float time_on_air = calculateTimeOnAir(100);  // для пакету 100 байт
+    float max_range = estimateRange(CommConfig::LORA_TX_POWER,
+                                    CommConfig::LORA_SPREADING_FACTOR);
+
+    Serial.println("📈 ОЧІКУВАНІ ПАРАМЕТРИ:");
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.printf("Time-on-Air (100B): ~%.0f ms\n", time_on_air);
+    Serial.printf("Макс. дальність:    ~%.1f км\n", max_range);
+    Serial.printf("Макс. throughput:   ~%.2f kbps\n", calculateThroughput());
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    return true;
+}
+
+float SwarmPairingManager::calculateTimeOnAir(uint8_t payload_size) {
+    // Формула для LoRa Time-on-Air
+    // https://www.rfwireless-world.com/calculators/LoRaWAN-Airtime-calculator.html
+
+    int SF = CommConfig::LORA_SPREADING_FACTOR;
+    int BW = CommConfig::LORA_BANDWIDTH * 1000;  // kHz → Hz
+    int CR = CommConfig::LORA_CODING_RATE;
+    bool CRC = true;
+    bool implicit_header = false;
+
+    float T_sym = (1 << SF) / (float)BW * 1000.0;  // Symbol time (ms)
+
+    int payload_symb_nb = 8 + max((int)ceil((8.0 * payload_size - 4.0 * SF + 28 + 16 * CRC - 20 * implicit_header) / (4.0 * SF)) * CR, 0);
+
+    float T_payload = payload_symb_nb * T_sym;
+    float T_preamble = (8 + 4.25) * T_sym;  // 8 symbols preamble + 4.25 sync
+
+    return T_preamble + T_payload;
+}
+
+//=============================================================================
+// ✅ HELPER: Оцінка дальності
+//=============================================================================
+
+float SwarmPairingManager::estimateRange(int8_t tx_power, uint8_t sf) {
+    // Спрощена формула для оцінки дальності
+    // Реальна дальність залежить від рельєфу, перешкод, антени
+
+    // Link Budget = TX Power + RX Sensitivity - Margins
+    float rx_sensitivity = -148.0 + (sf - 7) * 2.5;  // Приблизно для SF7-SF12
+    float link_budget = tx_power - rx_sensitivity;
+
+    // Free Space Path Loss: FSPL = 20*log10(d) + 20*log10(f) + 20*log10(4π/c)
+    // Для 868 MHz: FSPL = 20*log10(d) + 91.5
+    // d = 10^((Link_Budget - 91.5) / 20)
+
+    float path_loss_exponent = 2.0;  // 2.0 - free space, 3.5 - urban
+    float distance_km = pow(10, (link_budget - 91.5) / (10 * path_loss_exponent)) / 1000.0;
+
+    return distance_km;
+}
+
+//=============================================================================
+// ✅ HELPER: Обчислення throughput
+//=============================================================================
+
+float SwarmPairingManager::calculateThroughput() {
+    // Throughput (kbps) = (Payload_size * 8) / Time_on_Air
+    float toa = calculateTimeOnAir(255);  // Max payload
+    return (255.0 * 8.0) / toa;  // kbps
+}
+
+//=============================================================================
+// ✅ ДОДАТКОВА ФУНКЦІЯ: Тест LoRa зв'язку
+//=============================================================================
+
+bool SwarmPairingManager::TestLoRaConnection() {
+    Serial.println("\n🧪 ТЕСТ LoRa ЗВ'ЯЗКУ:");
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+
+    // Тест 1: Відправка
+    Serial.println("1️⃣ Тест TX (передача)...");
+    uint8_t test_packet[] = {0xDE, 0xAD, 0xBE, 0xEF};
+    LoRa.beginPacket();
+    LoRa.write(test_packet, sizeof(test_packet));
+    if (LoRa.endPacket()) {
+        Serial.println("   ✅ TX працює");
+    } else {
+        Serial.println("   ❌ TX НЕ працює!");
         return false;
     }
 
-    LoRa.setSpreadingFactor(7);      // Швидкий discovery
-    LoRa.setSignalBandwidth(500000); // Широка смуга
-    LoRa.setTxPower(20);             // Максимальна потужність
-    LoRa.enableCrc();
+    // Тест 2: RSSI
+    Serial.println("2️⃣ Тест RSSI (якість сигналу)...");
+    delay(100);
+    int rssi = LoRa.rssi();
+    Serial.printf("   RSSI: %d dBm ", rssi);
+    if (rssi < -120) {
+        Serial.println("(Немає сигналу ⚠️)");
+    } else if (rssi < -100) {
+        Serial.println("(Слабкий ✅)");
+    } else {
+        Serial.println("(Сильний ✅)");
+    }
 
-    LoRa.onReceive(OnDiscoveryMessageReceived);
+    // Тест 3: Прийом (loopback тест якщо є 2 дрони)
+    Serial.println("3️⃣ Тест RX (прийом)...");
+    Serial.println("   Чекаю 3 секунди на пакет від іншого дрона...");
+
     LoRa.receive();
+    unsigned long start = millis();
+    bool received = false;
 
-    Serial.println("✅ LoRa готовий для discovery");
+    while (millis() - start < 3000) {
+        int packetSize = LoRa.parsePacket();
+        if (packetSize > 0) {
+            Serial.printf("   ✅ Отримано пакет (%d bytes, RSSI: %d dBm)\n",
+                          packetSize, LoRa.packetRssi());
+            received = true;
+            break;
+        }
+        delay(10);
+    }
+
+    if (!received) {
+        Serial.println("   ⚠️  Пакетів не отримано (це нормально якщо поки немає інших дронів)");
+    }
+
+    Serial.println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    Serial.println("✅ ТЕСТ ЗАВЕРШЕНО\n");
+
     return true;
 }
 

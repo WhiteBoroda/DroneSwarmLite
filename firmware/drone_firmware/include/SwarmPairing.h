@@ -131,6 +131,11 @@ private:
     uint16_t my_drone_id_;
     bool is_coordinator_;
     bool pairing_complete_;
+    bool pairing_button_pressed_;
+    unsigned long pairing_button_press_time_;
+
+    static constexpr uint32_t BUTTON_DEBOUNCE_MS = 50;
+    static constexpr uint32_t LONG_PRESS_MS = 2000;  // 2 секунди для long press
 
     // Список виявлених дронів
     std::vector<DiscoveredDrone> discovered_drones_;
@@ -176,6 +181,7 @@ public:
     void BroadcastDiscoveryBeacon();
     void SendIDAssignment(uint64_t target_mac, uint16_t assigned_id);
     void SendIDConfirmation(uint64_t coordinator_mac);
+    bool WaitForPairingButton(uint32_t timeout_ms = 0);
     void BroadcastPairingComplete();
 
     // Обробники вхідних повідомлень
@@ -207,6 +213,7 @@ public:
     }
 
     bool IsPairingComplete() const { return pairing_complete_; }
+    bool IsPairingButtonPressed();
 
     // Діагностика
     void PrintDiscoveryStatus();

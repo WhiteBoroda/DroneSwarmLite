@@ -65,6 +65,9 @@ namespace HardwarePins {
     constexpr int BATTERY_VOLTAGE = 35;
     constexpr int CURRENT_SENSOR = 37;
     constexpr int RSSI_ANALOG = 34;
+
+    constexpr int PAIRING_BUTTON = 26;      // Кнопка START PAIRING
+    constexpr int PAIRING_LED = LED_COMM;   // LED індикація pairing
 }
 
 // Hardware timing constants (microseconds)
